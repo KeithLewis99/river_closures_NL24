@@ -1,0 +1,95 @@
+---
+title: "River Closures at different temperature thresholds"
+output:
+  html_document: 
+    keep_md: true
+  word_document: default
+  pdf_document: default
+date: "`r Sys.Date()`"
+authors: Emilie Geissinger, Curtis Pennell, Brianna Newton, Chelsea Bloom, and Keith Lewis
+affiliation: Coastal and Freshwater Ecology
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#knitr::opts_knit$set(root.dir = 'C:/Users/lewiske/Documents/CAFE/projects/temperature/river_closures')
+knitr::opts_knit$set(root.dir = here::here("Rcode/data-summary"))
+
+options(knitr.kable.NA = '')
+
+library(tidyverse)
+library(lubridate)
+library(knitr)
+library(ggpubr)
+library(osmdata)
+library(sf)
+library(geodata)
+library(kableExtra)
+```
+
+
+```{r loggers, echo = FALSE, warning = FALSE, message= FALSE, eval = FALSE}
+#source("Rcode/data-summary/environmental-protocol-data.R")
+#source("closure_summaries.R")
+
+```
+
+```{r}
+getwd()
+here::here() # not equivalent because of above knitr::opts_knit$set(root.dir = here::here("Rcode/data-summary"))
+
+# this is just to show that relative paths need to change now that the directory has switched to the document
+#partner.data <- read.csv("../../data-working/output/compiled-partner-data-2024.csv") |> 
+ #  mutate(Serial = as.character(Serial)) 
+```
+
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+knitr::include_graphics(here::here("Rcode/data-summary/output/figures_closures/BiscayBayRiver.png"))
+knitr::include_graphics(here::here("Rcode/data-summary/output/figures_closures/CampbelltonRiver.png"))
+knitr::include_graphics(here::here("Rcode/data-summary/output/figures_closures/ExploitsRiver.png"))
+knitr::include_graphics(here::here("Rcode/data-summary/output/figures_closures/RenewsRiver.png"))
+knitr::include_graphics(here::here("Rcode/data-summary/output/figures_closures/SalmonierRiver.png"))
+knitr::include_graphics(here::here("Rcode/data-summary/output/figures_closures/TerraNovaRiver.png"))
+
+#debug(knitr::include_graphics)
+#knitr::include_graphics("RenewsRiver.PNG") # this works for PNG in root - suggests 
+#![fig]("./output/figures_closures/RenewsRiver.PNG")
+#knitr::include_graphics("./output/figures_closures/RenewsRiver.PNG") # Excecution halted
+#knitr::include_graphics("./Rcode/data-summary/output/figures_closures/RenewsRiver.PNG") # this runs but produces an icon - Could not fetch resource
+#knitr::include_graphics(paste0(getwd(), "/Rcode/data-summary/output/figures_closures/RenewsRiver.png"))
+#include_graphics("Rcode/data-summary/output/figures_closures/RenewsRiver.PNG") # Excecution halted
+#knitr::include_graphics("./output/figures_closures/RenewsRiver.PNG") # Cannot find the file(s)
+#knitr::include_graphics("./output/figures_closures/RenewsRiver.PNG", rel_path = getOption("knitr.graphics.rel_path", FALSE)) # Excecution halted
+#knitr::include_graphics("C:/Users/lewiske/Documents/CAFE/projects/temperature/river_closures/output/figures_closures/RenewsRiver.PNG", rel_path = getOption("knitr.graphics.rel_path", FALSE)) # Excecution halted
+#knitr::include_graphics("./data-working/RenewsRiver.PNG") # this runs but produces an icon
+#knitr::include_graphics("data-working/RenewsRiver.PNG") # this runs but produces an icon
+#knitr::include_graphics("../../data-working/RenewsRiver.PNG") # Excecution halted
+#knitr::include_graphics(normalizePath("data-working/RenewsRiver.PNG")) # Excecution halted
+#knitr::include_graphics("C:/Users/lewiske/Documents/CAFE/projects/temperature/river_closures/output/figures_closures/RenewsRiver.PNG") # Excecution halted
+#knitr::include_graphics(here::here("river_closure/Rcode/data-summary/output/figures_closures/RenewsRiver.PNG")) # Excecution halted
+#knitr::include_graphics(here::here("./Rcode/data-summary/output/figures_closures/RenewsRiver.PNG")) # Excecution halted
+#knitr::include_graphics(here::here("Rcode/data-summary/output/figures_closures/RenewsRiver.png")) # Excecution halted
+#knitr::include_graphics("output/figures_closures/RenewsRiver.PNG") # Excecution halted
+#photo_path <- paste0(here::here(),"/rmarkdown/01_SpeciesTR/figs/BIIGLEScreenshot.png")
+# photo_path <- paste0(here::here(),"Rcode/data-summary/output/figures_closures/RenewsRiver.PNG")
+# knitr::include_graphics(photo_path, rel_path = FALSE)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

@@ -1,0 +1,312 @@
+---
+title: "River Closures at different temperature thresholds"
+output:
+  word_document: default
+  html_document:
+    df_print: paged
+  pdf_document: default
+date: "`r Sys.Date()`"
+authors: Emilie Geissinger, Curtis Pennell, Brianna Newton, and Chelsea Bloom
+affiliation: Coastal and Freshwater Ecology
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = 'C:/Users/lewiske/Documents/CAFE/projects/temperature/river_closures')
+options(knitr.kable.NA = '')
+
+library(tidyverse)
+library(lubridate)
+library(knitr)
+library(ggpubr)
+library(osmdata)
+library(sf)
+library(geodata)
+```
+
+
+```{r loggers, echo = FALSE, warning = FALSE, message= FALSE}
+#source("./test.R") # when test in main directory
+#source("../data-cleaning/test.R") # when test in data-cleaning
+#source("../data-cleaning/0_logger-metadata-2024.R") # works in R chunk but not for markdown
+#source("Rcode/data-cleaning/0_logger-metadata-2024.R")
+source("Rcode/data-summary/environmental-protocol-data.R")
+#source("./Rcode/data-cleaning/logger-metadata-2024.R")
+#source("C:/Users/lewiske/Documents/CAFE/projects/temperature/river_closures/Rcode/data-cleaning/0_logger-metadata-2024.R")
+# C:\Users\lewiske\Documents\CAFE\projects\temperature\river_closures\Rcode\data-cleaning
+```
+
+
+
+```{r map prep, echo = FALSE, warning = FALSE, message = FALSE}
+# ---- detailed map ----
+
+mapcanada <- gadm("canada", level = 1, path = ".", version = "latest")
+
+mapcan_sf <- st_as_sf(mapcanada)
+
+# b <- opq(bbox = c(-61.06, 46.71, -52.95, 55.62)) |>
+#   add_osm_features(features = list( "water" = "river",
+#                                     "water" = "stream")) |>
+#   osmdata_sf()
+
+
+```
+
+
+```{r basemap, echo = FALSE, warning = FALSE, message = FALSE}
+## only want the 2024 stations
+cols <- c("Water" = "blue",  "Level" = "purple", "Hobo Weather Station" = 'orange')
+basemap <- ggplot(mapcan_sf) +
+  geom_sf() +
+  # geom_sf(data = b$osm_multipolygons, aes()) +
+  xlim(-61.45, -52.7) +
+  ylim(46.7, 55.65) +
+  theme_bw()
+
+
+# ggsave("./output/map-figures/cellularstations.png", device = "png", height = 8, width = 8, units = "in")
+
+
+```
+
+## Overview
+The purpose of this report is to assess how river closures based on the Environmental protocol vary across different temperature thresholds. Currently, the environmental protocol states that after 3 consecutive days of water temperature > 20°C, rivers may be closed to angling, with catch and release angling allowed until 10 am each day. We evaluate the change river closures across three temperature thresholds: 20°C, 19°C, and 18°C. 
+
+
+
+## Available data
+In 2023, we have data available from `r season23 |> distinct(Serial) |> count()` cellular stations and loggers across `r season23 |> distinct(River.Name) |> count()` rivers, and in 2024, we have data available from `r season24 |> distinct(Serial) |> count()` cellular stations and loggers across `r season24 |> distinct(River.Name) |> count()` rivers (Appendix 1) from Science, C&P, and partner groups (Fig. 1). C&P loggers have not been included at this time, as the data has not been processed yet. In cases where there are multiple loggers per river, hourly temperature is an average across the loggers. In order to limit underestimating closure effects, we only use rivers with data for the entire salmon season (June 1 - Sept 7). 
+
+```{r full map, echo = FALSE, warning = FALSE, message = FALSE}
+cols <- c("Water" = "blue",  "Level" = "purple", "Hobo Weather Station" = 'orange')
+
+loggers2 <- loggers |> 
+  filter(Serial %in% water$Serial) |> 
+  mutate(Group = replace(Group, Recording == "Hobo Weather Station" & Group == "CAFE", "Hobo Weather Station - Science"),
+         Group = replace(Group, Recording == "Hobo Weather Station" & Group == "C&P", "Hobo Weather Station - C&P")) |> 
+  mutate(Group = replace(Group, Group == "CAFE", "Science")) |> 
+  mutate(Group = replace(Group, Group %in% c("SAEN", "AROC", "FABEC", "NCC", "GR"), "Partners"))
+
+fullmap <- basemap +
+  # geom_point(data = loggers2,
+  #            aes(x = Long, y = Lat, shape = Group, fill = Group)) +
+  geom_point(data = loggers2 |> filter(Group == "Partners"),
+             aes(x = Long, y = Lat, shape = "Partners", fill = "Partners"), size = 2.5) +
+  # geom_point(data = loggers2 |> filter(Group == "C&P"),
+  #            aes(x = Long, y = Lat, shape = "C&P", fill = "C&P"), size = 2.5) +
+  geom_point(data = loggers2 |> filter(Group == "Science"),
+             aes(x = Long, y = Lat, shape = "Science", fill = "Science"), size = 2.5) +
+  geom_point(data = loggers2 |> filter(Group == "Hobo Weather Station - C&P"),
+             aes(x = Long, y = Lat, shape = "Hobo Weather Station - C&P", fill = "Hobo Weather Station - C&P"), size = 2.5) +
+  geom_point(data = loggers2 |> filter(Group == "Hobo Weather Station - Science"),
+             aes(x = Long, y = Lat, shape = "Hobo Weather Station - Science", fill = "Hobo Weather Station - Science"), size = 2.5) +
+  scale_fill_manual(name = "Loggers",
+                     labels = c("Hobo Weather Station - Science", "Hobo Weather Station - C&P", "Science", 
+                                # "C&P", 
+                                "Partners"),
+                    breaks = c("Hobo Weather Station - Science", "Hobo Weather Station - C&P", "Science", 
+                               # "C&P", 
+                               "Partners"),
+                     values = c("Hobo Weather Station - Science" = 'orange',
+                                "Hobo Weather Station - C&P" = 'orange',
+                                "Science" = 'blue',
+                                # "C&P" = 'purple',
+                                "Partners" = 'darkgreen')) +
+  scale_shape_manual(name = "Loggers",
+                     labels = c("Hobo Weather Station - Science", "Hobo Weather Station - C&P", "Science", 
+                                # "C&P", 
+                                "Partners"),
+                     breaks = c("Hobo Weather Station - Science", "Hobo Weather Station - C&P", "Science",
+                                # "C&P", 
+                                "Partners"),
+                     values = c("Hobo Weather Station - Science" = 22,
+                                "Hobo Weather Station - C&P" = 25,
+                                "Science" = 21,
+                                # "C&P" = 21,
+                                "Partners" = 21)) +
+  guides(fill = guide_legend(override.aes = list(shape = c(22,25,21,
+                                                           # 21,
+                                                           21))),
+         shape = guide_legend(override.aes = list(fill = c('orange', 'orange', 'blue', 
+                                                           # 'purple', 
+                                                           'darkgreen'))))
+
+# nfld <- fullmap + 
+#   xlim(-60, -52.7) +
+#   ylim(46.7, 52)
+# 
+# lab <- fullmap +
+#   xlim(-61.45, -55.7) +
+#   ylim(51.5, 55.65)
+  
+fullmap
+```
+
+Figure 1. Loggers used to evaluate river closures for 2024 at various temperatures (20, 19, and 18 °C). Orange squares (Science) and orange upside down triangles (C&P) represent cellular station data, and blue circles represent Science loggers and green circles represents partner loggers. 
+
+
+
+## Results
+
+
+```{r summary, echo = FALSE, message = FALSE, warning = FALSE}
+kable(overall2023, caption = "Table 1. Number of rivers evaluated for 2023 to determine the effect of enviornmental protocol temperatures on number of rivers closed, total closures, maximum clousre time, average closure time, and average temperature during closure ± standard deviation.")
+kable(overall2024,caption = "Table 1. Number of rivers evaluated for 2024 to determine the effect of enviornmental protocol temperatures on number of rivers closed, total closures, maximum clousre time, average closure time, and average temperature during closure ± standard deviation.")
+
+```
+
+### Figures
+Hourly water temperature for rivers with available data for 2023 and 2024. Dashed line represents the environmental protocol temperature, organge lines represent the monitoring period prior to a closure when water temperature is above the designated threshold, and red represents the period in which a river would be closed. Grey shading in 2024 represents periods when rivers were officially closed.
+
+```{r test plots, echo = FALSE, message = FALSE, warning = FALSE, eval = FALSE}
+
+p1 <- season20 |> 
+  left_join(closures20 |> mutate(status = 'closed')) |>
+  mutate(status = replace(status, is.na(status), "open")) |> 
+  left_join(real.closures, relationship = "many-to-many") |> 
+  filter(River.Name == "Terra Nova River") |> 
+  ggplot() +
+  geom_rect(aes(xmin = Date.of.Closure, xmax = Re.open.Date, ymin = -Inf, ymax = Inf), alpha = 0.2, fill = 'lightgrey') +
+  geom_line(aes(x = Time, y = Temp.C, color = status)) +
+  geom_hline(yintercept = 20, linetype = 'dashed') +
+  theme_bw() +
+  scale_color_manual(breaks = c("open", "closed"),
+                     values = c('black', 'red')) +
+  labs(x = "Date",
+       y = "Temperature (°C)",
+       color = "Temperature-based river status",
+       title = "Terra Nova River at 20°C threshold") +
+  theme(legend.position = "bottom")
+
+p2 <- season19 |> 
+  left_join(closures19 |> mutate(status = 'closed')) |>
+  mutate(status = replace(status, is.na(status), "open")) |> 
+  left_join(real.closures, relationship = "many-to-many") |> 
+  filter(River.Name == "Terra Nova River") |> 
+  ggplot() +
+   geom_rect(aes(xmin = Date.of.Closure, xmax = Re.open.Date, ymin = -Inf, ymax = Inf), alpha = 0.2, fill = 'lightgrey') +
+  geom_line(aes(x = Time, y = Temp.C, color = status)) +
+  geom_hline(yintercept = 19, linetype = 'dashed') +
+  theme_bw() +
+  scale_color_manual(breaks = c("open", "closed"),
+                     values = c('black', 'red')) +
+  labs(x = "Date",
+       y = "Temperature (°C)",
+       color = "Temperature-based river status",
+       title = "Terra Nova River at 19°C threshold") +
+  theme(legend.position = "bottom")
+
+p3 <- season18 |> 
+  left_join(closures18 |> mutate(status = 'closed')) |>
+  mutate(status = replace(status, is.na(status), "open")) |> 
+  left_join(real.closures, relationship = "many-to-many") |> 
+  filter(River.Name == "Terra Nova River") |> 
+  ggplot() +
+   geom_rect(aes(xmin = Date.of.Closure, xmax = Re.open.Date, ymin = -Inf, ymax = Inf), alpha = 0.2, fill = 'lightgrey') +
+  geom_line(aes(x = Time, y = Temp.C, color = status)) +
+  geom_hline(yintercept = 18, linetype = 'dashed') +
+  theme_bw() +
+  scale_color_manual(breaks = c("open", "closed"),
+                     values = c('black', 'red')) +
+  labs(x = "Date",
+       y = "Temperature (°C)",
+       color = "Temperature-based river status",
+       title = "Terra Nova River at 18°C threshold") +
+  theme(legend.position = "bottom")
+
+p1
+p2
+p3
+
+```
+
+```{r all plots, echo = FALSE, message = FALSE, warning = FALSE}
+rivers <- unique(season20$River.Number)
+
+for (i in seq_along(rivers)) {
+  
+ p1 <- df20  |> 
+  filter(River.Number == rivers[i]) |> 
+  ggplot() +
+  geom_rect(aes(xmin = Date.of.Closure, xmax = Re.open.Date, ymin = -Inf, ymax = Inf), alpha = 0.2, fill = 'lightgrey') +
+   geom_line(aes(x = Time, y = Temp.C, color = "open")) +
+   geom_line(data = df20 |> filter(River.Number == rivers[i]) |> filter(status == "closed"),
+             aes(x = Time, y = Temp.C, group = period, color = "closed")) +
+   geom_line(data = df20 |> filter(River.Number == rivers[i]) |> filter(status == "monitored"),
+             aes(x = Time, y = Temp.C, group = period, color = "monitored")) +
+  geom_hline(yintercept = 20, linetype = 'dashed') +
+  theme_bw() +
+  scale_color_manual(name = "Temperature-based river status",
+                     labels = c("open", "monitored", "closed"),
+                     breaks = c("open", "monitored", "closed"),
+                     values = c('black', 'darkorange', 'red')) +
+  labs(x = "Date",
+       y = "Temperature (°C)",
+       title = paste(season20$River.Name[season20$River.Number == rivers[i]], "at 20°C threshold")) +
+  theme(legend.position = "bottom") + facet_wrap(~Year, scales = "free_x")
+
+p2 <- df19  |> 
+  filter(River.Number == rivers[i]) |> 
+  ggplot() +
+   geom_rect(aes(xmin = Date.of.Closure, xmax = Re.open.Date, ymin = -Inf, ymax = Inf), alpha = 0.2, fill = 'lightgrey') +
+  geom_line(aes(x = Time, y = Temp.C, color = "open")) +
+   geom_line(data = df19 |> filter(River.Number == rivers[i]) |> filter(status == "closed"),
+             aes(x = Time, y = Temp.C, group = period, color = "closed")) +
+  geom_line(data = df19 |> filter(River.Number == rivers[i]) |> filter(status == "monitored"),
+             aes(x = Time, y = Temp.C, group = period, color = "monitored")) +
+  geom_hline(yintercept = 19, linetype = 'dashed') +
+  theme_bw() +
+    scale_color_manual(name = "Temperature-based river status",
+                     labels = c("open", "monitored", "closed"),
+                     breaks = c("open", "monitored", "closed"),
+                     values = c('black', 'darkorange', 'red')) +
+  labs(x = "Date",
+       y = "Temperature (°C)",
+      title = paste(season19$River.Name[season19$River.Number == rivers[i]], "at 19°C threshold")) +
+  theme(legend.position = "bottom") +
+  facet_wrap(~Year, scales = "free_x")
+
+p3 <- df18  |> 
+  filter(River.Number == rivers[i]) |> 
+  ggplot() +
+   geom_rect(aes(xmin = Date.of.Closure, xmax = Re.open.Date, ymin = -Inf, ymax = Inf), alpha = 0.2, fill = 'lightgrey') +
+ geom_line(aes(x = Time, y = Temp.C, color = "open")) +
+   geom_line(data = df18 |> filter(River.Number == rivers[i]) |> filter(status == "closed"),
+             aes(x = Time, y = Temp.C, group = period, color = "closed")) +
+  geom_line(data = df18 |> filter(River.Number == rivers[i]) |> filter(status == "monitored"),
+             aes(x = Time, y = Temp.C, group = period, color = "monitored")) +
+  geom_hline(yintercept = 18, linetype = 'dashed') +
+  theme_bw() +
+  scale_color_manual(name = "Temperature-based river status",
+                     labels = c("open", "monitored", "closed"),
+                     breaks = c("open", "monitored", "closed"),
+                     values = c('black', 'darkorange', 'red')) +
+  labs(x = "Date",
+       y = "Temperature (°C)",
+       title = paste(season18$River.Name[season18$River.Number == rivers[i]], "at 18°C threshold")) +
+  theme(legend.position = "bottom") +
+  facet_wrap(~Year, scales = "free_x")
+
+print(p1)
+print(p2)
+print(p3)
+cat('\n\n')
+  
+}
+
+```
+
+### Appendix
+```{r rivers, echo = FALSE, warning= FALSE, message = FALSE}
+
+table1 <- water |> 
+  distinct(Year, River.Name, SFA, River.Number, Serial) |> 
+  group_by(Year, SFA, River.Number, River.Name) |>
+  summarise(Loggers = n()) |> 
+  ungroup() |> 
+  arrange(SFA, River.Number) |> 
+  mutate(River.Number = replace(River.Number, River.Name == "Char Brook", ""))
+  
+kable(table1) 
+```

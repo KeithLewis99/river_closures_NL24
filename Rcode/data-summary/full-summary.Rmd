@@ -1,0 +1,2825 @@
+---
+title: "Full Summary"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = 'C:/Users/Geissingere/Documents/Projects/Temperature-Project')
+options(knitr.kable.NA = '')
+
+library(tidyverse)
+library(lubridate)
+library(knitr)
+# library(pandoc)
+library(ggpubr)
+library(leaflet)
+library(osmdata)
+library(sf)
+library(geodata)
+library(kableExtra)
+
+```
+
+```{r loggers, echo = FALSE, warning = FALSE, message= FALSE}
+
+source("./Rcode/data-cleaning/logger-metadata-2024.R")
+```
+
+```{r data upload, message = FALSE, echo = FALSE, warning = FALSE}
+
+source("./Rcode/data-cleaning/hobolink_station_combo.R")
+source("./Rcode/data-cleaning/hobolink_station_cleaning.R")
+
+water22 <- read.csv("./data-working/output/compiled-water-temperature-2014to2022.csv") |> 
+  mutate(Serial = as.character(Serial),
+         SFA = as.character(SFA))
+water23 <- read.csv("./data-working/output/compiled-water-temperature-2023.csv") |> 
+  mutate(Serial = as.character(Serial),
+         SFA = as.character(SFA))
+water24 <- read.csv("./data-working/output/compiled-water-temperature-2024.csv") |> 
+  mutate(SFA = as.character(SFA))
+
+partner.data <- read.csv("./data-working/output/compiled-partner-data-2024.csv") |> 
+  mutate(Serial = as.character(Serial)) 
+
+waterfull <- bind_rows(water22, water23, water24, partner.data) |> 
+  mutate(Date.UTC = ymd(Date.UTC),
+         Time.UTC = ymd_hms(paste(Date.UTC, Time.UTC), tz = "UTC")) |> 
+  filter(Year >= 2022) |> 
+  mutate(Time = with_tz(Time.UTC, tzone = "America/St_Johns")) |> 
+  mutate(Date = date(Time))
+
+
+
+water <- waterfull |> 
+  filter(out.of.water == 0) |> 
+  filter(!is.na(Temp.C)) |> 
+  ## remove the northwest brook short term loggers
+  mutate(Serial = as.integer(Serial)) |> 
+  filter(!is.na(Serial))
+
+hobo <- hobo |> 
+  mutate(Station2 = factor(paste(River.Number, ". ", Station, sep = ""))) |>
+  mutate(Station2 = fct_reorder(Station2, River.Number)) |> 
+  mutate(Time = with_tz(Time.UTC, tzone = "America/St_Johns")) |>  
+  arrange(SFA, River.Number, Serial, Time) |> 
+  mutate(Date = date(Time)) |> 
+  mutate(WaterTemperature_C = replace(WaterTemperature_C, out.of.water !=0, NA))
+
+removes <- current.loggers |> 
+  filter(Recording == "Hobo Weather Station") |> 
+  filter(Station %in% c("BDL", "Goodyears Dam", "North East Placentia")) |> 
+  mutate(remove = "yes")
+
+partner.loggers <- partner.data |> 
+  distinct(Recording, Partner, Station, Serial, River, Lat, Long, SFA, River.Number) |> 
+  rename(Group = Partner,
+         River.Name = River)
+
+## loggers
+loggers <- current.loggers |> 
+  left_join(removes) |> 
+  filter(is.na(remove)) |> 
+  dplyr::select(-remove) |> 
+  bind_rows(partner.loggers) |> 
+  ## add Gray River and Grandy's River
+  add_row(Station = "Grey River", 
+          Lat = 47.689433,
+          Long = -57.001846,
+          Recording = "Water",
+          SFA = "11",
+          River.Number = 121,
+          River.Name = "Grey River",
+          Group = "CAFE") |> 
+  add_row(Station = "Grandys River", 
+          Lat = 47.689433,
+          Long = -57.001846,
+          Recording = "Water",
+          SFA = "12",
+          River.Number = 125,
+          River.Name = "Grandy's River",
+          Group = "CAFE") |> 
+  ## make sure group is correctly reflected
+  mutate(Group = replace(Group, is.na(Group) & River.Number == 61 & Logger.Type == "Tidbit", "FABEC"),
+         Group = replace(Group, is.na(Group) & River.Number == 60 & Logger.Type == "Tidbit", "FABEC"),
+         Group = replace(Group, is.na(Group) & River.Number == 59 & Logger.Type == "Tidbit", "FABEC"),
+         Group = replace(Group, is.na(Group) & River.Number == 62 & Logger.Type == "Tidbit", "FABEC")) |> 
+  mutate(Group = replace(Group, is.na(Group) & Serial %in% c(21417670, 21290092, 21042542, 21290104), "SAEN")) |>
+  mutate(Group = replace(Group, is.na(Group) & Recording == "Water" & River.Name == "Hunt River", "AROC")) |> 
+  mutate(Group = replace(Group, Recording == "Hobo Weather Station" & Serial %in% c(21560024, 21560027,	21931677, 21560020,	21560026, 21931676,21560019,21931680, 21931681, 21560023,	21368518), "C&P")) |> 
+  mutate(Group = replace(Group, Recording == "Level" & Station == "Shinneys River", "NCC")) |> 
+  ## all remaining are cafe
+  mutate(Group = replace(Group, is.na(Group), "CAFE")) |> 
+  ## remove bad data
+  filter(!Serial %in% c(86,46,48,123456)) |> 
+  dplyr::select(Station, Lat, Long, Recording, Serial, Logger.Type, SFA, River.Number, River.Name, Group) |> 
+  distinct() |> 
+  ## remove duplicates
+  filter(Station != "Indian Bay Brook") |> 
+  filter(Serial != 21436595)
+  
+  
+
+```
+
+
+
+
+
+## Near real time weather stations 
+
+
+### Weather station Map
+(missing some lats and longs here, will resolve before putting in presentation)
+```{r map hobo, echo = FALSE}
+# ---- detailed map ----
+
+mapcanada <- gadm("canada", level = 1, path = ".", version = "latest")
+
+mapcan_sf <- st_as_sf(mapcanada)
+
+# b <- opq(bbox = c(-61.06, 46.71, -52.95, 55.62)) |>
+#   add_osm_features(features = list( "water" = "river",
+#                                     "water" = "stream")) |>
+#   osmdata_sf()
+## only want the 2024 stations
+ggplot(mapcan_sf) +
+  geom_sf() +
+  # geom_sf(data = b$osm_multipolygons, aes()) +
+  geom_point(data = loggers |> filter(Recording == "Hobo Weather Station"), aes( x = Long, y = Lat, fill = Group),
+             size = 2, alpha = 0.85, shape = 21) +
+  xlim(-61.1, -52.9) +
+  ylim(46.7, 55.65) +
+  theme_bw() +
+  labs(x = "Latitude",
+       y = "Longitude",
+       fill = "Group") +
+  scale_fill_manual(values = c('blue', 'purple', 'navy')) +
+  theme(panel.grid = element_blank(),
+        axis.title = element_text(size = 11),
+        axis.text = element_text(size = 10),
+        plot.margin = margin(t = 5, r = 0, b = 5, l = 0, unit = "pt"))
+
+
+ggsave("./output/map-figures/cellularstations.png", device = "png", height = 8, width = 8, units = "in")
+
+
+
+```
+
+
+
+
+
+```{r comparison by week, echo = FALSE, message = FALSE, eval = FALSE}
+## all hobos
+
+nas <- hobo |> 
+  filter(is.na(WaterTemperature_C) & is.na(WaterLevel_meters) & is.na(AirTemperature_C))
+
+hobo1 <- hobo |> filter(year(Time) == 2023 & month(Time) >= 5) |> 
+  anti_join(nas) |> 
+  mutate(WaterTemperature_C = replace(WaterTemperature_C, out.of.water == 1, NA)) 
+
+
+ggplot() +
+  geom_hline(yintercept = 0, colour = 'grey10', linetype = 'dashed') +
+  geom_hline(yintercept = 20, colour = 'darkgrey', linetype = 'dashed') +
+  
+  geom_line(data = hobo1 |> 
+              filter(!is.na(AirTemperature_C)) |>
+  group_by(Station2) |>
+  complete(Time = seq.POSIXt(min(Time), max(Time), by = "1 day")) |>
+  ungroup(),
+            aes(x = Time, y = AirTemperature_C, colour = "Air Temperature")) +
+  geom_line(data = hobo1 |> 
+              filter(!is.na(WaterTemperature_C)) |>
+  group_by(Station2) |>
+  complete(Time = seq.POSIXt(min(Time), max(Time), by = "1 day")) |>
+  ungroup(),
+            aes( x = Time, y = WaterTemperature_C, colour = "Water Temperature")) +
+  geom_line(data = hobo1 |> 
+              filter(!is.na(WaterLevel_meters)) |>
+  group_by(Station2) |>
+  complete(Time = seq.POSIXt(min(Time), max(Time), by = "1 day")) |>
+  ungroup(),
+                     aes(x = Time, y = WaterLevel_meters*20, colour = "Water Level")) +
+  facet_wrap(~Station2, scales = "free_x") +
+  labs(x = "Time", 
+       y = "Temperature (°C)") +
+  theme_bw() +
+  scale_y_continuous(sec.axis = sec_axis(name = "Water Level (m)",
+                                         trans = ~.x/20),
+                     limits = c(-0.1, 40)) +
+    scale_x_datetime(date_labels = "%b-%y") +
+  scale_colour_manual( name = "Recording",
+                       breaks = c( 'Water Temperature', 'Air Temperature', 'Water Level' ),
+                       values = c( 'Water Temperature' = 'black',
+                                   'Air Temperature' = 'darkred', 
+                                   'Water Level' = 'blue' ) ) +
+  theme(legend.position = "bottom")
+
+ggsave(file = "./output/figures/all-hobos-2023.png", device = "png", units = "in", height = 6.5, width = 13)
+
+```
+
+```{r subset map, echo = FALSE, message = FALSE, eval = FALSE}
+rivers <- c("Stoney River", "Campbellton", "Terra Nova Lower Fishway", "Salmon Brook Cell Station", "Trepassey NW Brook", "Garnish River")
+
+ggplot(mapcan_sf) +
+  geom_sf() +
+  geom_sf(data = b$osm_multipolygons, aes()) +
+  geom_point(data = full.loggers |> filter(Recording == "Hobo Weather Station") |> 
+               filter(Station %in% rivers), aes( x = Long, y = Lat, fill = Group),
+             size = 2, alpha = 0.85, shape = 21) +
+  xlim(-56, -52.5) +
+  ylim(46.7, 50) +
+  theme_bw() +
+  labs(x = "Latitude",
+       y = "Longitude",
+       fill = "Group") +
+  scale_fill_manual(values = c('blue', 'purple', 'navy')) +
+  theme(panel.grid = element_blank(),
+        axis.title = element_text(size = 11),
+        axis.text = element_text(size = 10))
+
+ggsave(file = "./output/figures/hobosubset.png", device = "png", units = "in", height = 4, width = 5)
+```
+
+```{r week comparisons with water level, echo = FALSE, message = FALSE, eval = FALSE}
+
+# rivers <- c("Salmon Brook Near Glenwood", "Stoney", "Terra Nova Lower Fishway", "Trepassey NW Brook", "Salmonier River", "North East Placentia", "Campbellton", "Garnish River")
+
+
+rivers <- c("Stoney", "Campbellton", "Terra Nova Lower Fishway", "Salmon Brook Near Glenwood", "Trepassey NW Brook", "Garnish River")
+
+hobo2 <- hobo1 |> 
+  filter(Station %in% rivers) |> 
+  filter(Time >= as_datetime("2023-07-18 00:00:00") & Time <= as_datetime("2023-07-27 00:00:00"))
+
+
+ggplot() +
+  geom_hline(yintercept = 20, linetype = 'dashed', colour = 'red') +
+  geom_line(data = hobo2 |>
+              filter(!is.na(WaterLevel_meters)) |>
+  group_by(Station2) |>
+  complete(Time = seq.POSIXt(min(Time), max(Time), by = "1 day")) |>
+  ungroup(),
+                     aes(x = Time, y = WaterLevel_meters*10 +20, colour = "Water Level")) +
+  geom_line(data = hobo2 |> 
+              filter(!is.na(WaterTemperature_C)) |>
+  group_by(Station2) |>
+  complete(Time = seq.POSIXt(min(Time), max(Time), by = "1 day")) |>
+  ungroup(),
+            aes( x = Time, y = WaterTemperature_C, colour = "Water Temperature")) +
+  facet_wrap(~Station2, scales = "free_x", nrow = 2) +
+  labs(x = "Time", 
+       y = "Temperature (°C)") +
+  theme_bw() +
+  scale_y_continuous(sec.axis = sec_axis(name = "Water Level (m)",
+                                         trans = ~(.x - 20)/10)) +
+    scale_x_datetime(date_labels = "%d-%b-%y") +
+  scale_colour_manual( name = "Recording",
+                       breaks = c( 'Water Temperature', 'Air Temperature', 'Water Level' ),
+                       values = c( 'Water Temperature' = 'black',
+                                   'Air Temperature' = 'darkred', 
+                                   'Water Level' = 'blue' ) ) +
+  theme(legend.position = "bottom")
+
+ggsave(file = "./output/figures/week_data_withoutair-2023.png", device = "png", units = "in", height = 7, width = 12)
+
+
+```
+
+```{r realtime examples TN, echo = FALSE, warning = FALSE, eval = FALSE}
+
+
+
+### threshold days
+
+Start1 <- hobo |> 
+  dplyr::select(Station, Date, Time, WaterTemperature_C, WaterLevel_meters, River.Name) |> 
+  distinct() |> 
+  filter(River.Name == "Terra Nova River") |> 
+  filter(!is.na(WaterTemperature_C)) |> 
+  filter(year(Date) == 2023) |> 
+    filter(month(Date) >= 6 & month(Date) <= 9) |> 
+  filter(WaterTemperature_C > 20) |> 
+  filter(Time == min(Time)) |> 
+  mutate(state = "initial") |> 
+  mutate(Alarm.On = Time + duration(3, units = "days")) |> 
+  dplyr::select(Time, Alarm.On)
+
+Temp1 <- hobo |> 
+    dplyr::select(Station, Date, Time, WaterTemperature_C, WaterLevel_meters, River.Name) |> 
+  distinct() |> 
+  filter(River.Name == "Terra Nova River") |> 
+  filter(Time == Start1$Alarm.On) |> 
+  dplyr::select(WaterTemperature_C)
+  
+Period1 <- hobo |> 
+  dplyr::select(Station, Date, Time, WaterTemperature_C, WaterLevel_meters, River.Name) |> 
+  distinct() |> 
+  filter(River.Name == "Terra Nova River") |> 
+  filter(Time >= Start1$Time & Time <= Start1$Alarm.On) |> 
+  mutate(check = WaterTemperature_C > 20) |> 
+  filter(check == FALSE) |> 
+  filter(Time == min(Time))
+Period1
+
+
+Stop1 <- hobo |> 
+  dplyr::select(Station, Date, Time, WaterTemperature_C, WaterLevel_meters, River.Name) |> 
+  distinct() |> 
+  filter(River.Name == "Terra Nova River") |> 
+  filter(Time >= Start1$Alarm.On) |> 
+  filter(WaterTemperature_C <= 20) |> 
+  filter(Time == min(Time)) |> 
+  rename(Alarm.Off = Time) |> 
+  dplyr::select(Alarm.Off, WaterTemperature_C)
+
+
+Start2 <- hobo |> 
+  dplyr::select(Station, Date, Time, WaterTemperature_C, WaterLevel_meters, River.Name) |> 
+  distinct() |> 
+  filter(River.Name == "Terra Nova River") |> 
+  filter(Time >= Stop1$Alarm.Off) |> 
+  filter(WaterTemperature_C > 20) |> 
+  filter(Time == min(Time)) |> 
+  mutate(state = "initial") |> 
+  mutate(Alarm.On = Time + duration(3, units = "days")) |> 
+  dplyr::select(Time, Alarm.On)
+
+Period2 <-  hobo |> 
+  dplyr::select(Station, Date, Time, WaterTemperature_C, WaterLevel_meters, River.Name) |> 
+  distinct() |> 
+  filter(River.Name == "Terra Nova River") |> 
+  filter(Time >= Start2$Time & Time <= Start2$Alarm.On) |> 
+  mutate(check = WaterTemperature_C > 20) |> 
+  filter(check == FALSE) |> 
+  filter(Time == min(Time))
+
+Start2$Alarm.On <- NA
+## no start 2 alarm
+
+Start3 <- hobo |> 
+  dplyr::select(Station, Date, Time, WaterTemperature_C, WaterLevel_meters, River.Name) |> 
+  distinct() |> 
+  filter(River.Name == "Terra Nova River") |> 
+  filter(Time >= Period2$Time) |> 
+  filter(WaterTemperature_C > 20) |> 
+  filter(Time == min(Time)) |> 
+  mutate(state = "initial") |> 
+  mutate(Alarm.On = Time + duration(3, units = "days")) |> 
+  dplyr::select(Time, Alarm.On)
+
+Period3 <-  hobo |> 
+  dplyr::select(Station, Date, Time, WaterTemperature_C, WaterLevel_meters, River.Name) |> 
+  distinct() |> 
+  filter(River.Name == "Terra Nova River") |> 
+  filter(Time >= Start3$Time & Time <= Start3$Alarm.On) |> 
+  mutate(check = WaterTemperature_C > 20) |> 
+  filter(check == FALSE) |> 
+  filter(Time == min(Time))
+
+Start3$Alarm.On <- NA
+
+Start4 <- hobo |> 
+  dplyr::select(Station, Date, Time, WaterTemperature_C, WaterLevel_meters, River.Name) |> 
+  distinct() |> 
+  filter(River.Name == "Terra Nova River") |> 
+  filter(Time >= Period3$Time) |> 
+  filter(WaterTemperature_C > 20) |> 
+  filter(Time == min(Time)) |> 
+  mutate(state = "initial") |> 
+  mutate(Alarm.On = Time + duration(3, units = "days")) |> 
+  dplyr::select(Time, Alarm.On)
+
+Period4 <-  hobo |> 
+  dplyr::select(Station, Date, Time, WaterTemperature_C, WaterLevel_meters, River.Name) |> 
+  distinct() |> 
+  filter(River.Name == "Terra Nova River") |> 
+  filter(Time >= Start4$Time & Time <= Start4$Alarm.On) |> 
+  mutate(check = WaterTemperature_C > 20) |> 
+  filter(check == FALSE) |> 
+  filter(Time == min(Time))
+
+Start4$Alarm.On <- NA
+
+Start5 <- hobo |> 
+  dplyr::select(Station, Date, Time, WaterTemperature_C, WaterLevel_meters, River.Name) |> 
+  distinct() |> 
+  filter(River.Name == "Terra Nova River") |> 
+  filter(Time >= Period4$Time) |> 
+  filter(WaterTemperature_C > 20) |> 
+  filter(Time == min(Time)) |> 
+  mutate(state = "initial") |> 
+  mutate(Alarm.On = Time + duration(3, units = "days")) |> 
+  dplyr::select(Time, Alarm.On)
+
+Period5 <-  hobo |> 
+  dplyr::select(Station, Date, Time, WaterTemperature_C, WaterLevel_meters, River.Name) |> 
+  distinct() |> 
+  filter(River.Name == "Terra Nova River") |> 
+  filter(Time >= Start5$Time & Time <= Start5$Alarm.On) |> 
+  mutate(check = WaterTemperature_C > 20) |> 
+  filter(check == FALSE) |> 
+  filter(Time == min(Time))
+
+Start5$Alarm.On <- NA
+
+
+Start6 <- hobo |> 
+  dplyr::select(Station, Date, Time, WaterTemperature_C, WaterLevel_meters, River.Name) |> 
+  distinct() |> 
+  filter(River.Name == "Terra Nova River") |> 
+  filter(Time >= Period5$Time) |> 
+  filter(WaterTemperature_C > 20) |> 
+  filter(Time == min(Time)) |> 
+  mutate(state = "initial") |> 
+  mutate(Alarm.On = Time + duration(3, units = "days")) |> 
+  dplyr::select(Time, Alarm.On)
+
+Period6 <-  hobo |> 
+  dplyr::select(Station, Date, Time, WaterTemperature_C, WaterLevel_meters, River.Name) |> 
+  distinct() |> 
+  filter(River.Name == "Terra Nova River") |> 
+  filter(Time >= Start6$Time & Time <= Start6$Alarm.On) |> 
+  mutate(check = WaterTemperature_C > 20) |> 
+  filter(check == FALSE) |> 
+  filter(Time == min(Time))
+
+Temp6 <- hobo |> 
+    dplyr::select(Station, Date, Time, WaterTemperature_C, WaterLevel_meters, River.Name) |> 
+  distinct() |> 
+  filter(River.Name == "Terra Nova River") |> 
+  filter(Time == Start6$Alarm.On) |> 
+  dplyr::select(WaterTemperature_C)
+
+Stop6 <- hobo |>
+  dplyr::select(Station, Date, Time, WaterTemperature_C, WaterLevel_meters, River.Name) |> 
+  distinct() |> 
+  filter(River.Name == "Terra Nova River") |> 
+  filter(Time >= Start6$Alarm.On) |> 
+  filter(WaterTemperature_C <= 20) |> 
+  filter(Time == min(Time)) |> 
+  rename(Alarm.Off = Time) |> 
+  dplyr::select(Alarm.Off, WaterTemperature_C)
+
+
+Alarms <- bind_rows(Start1, Start2, Start3, Start4, Start5, Start6) |> 
+  filter(!is.na(Alarm.On)) |> 
+  bind_cols(bind_rows(Stop1, Stop6)) |> 
+  rename(TempStop = WaterTemperature_C) |> 
+  bind_cols(bind_rows(Temp1, Temp6)) |> 
+  rename(TempStart = WaterTemperature_C)
+# Alarms[2,]
+  
+
+
+
+## Terra Nova
+TNfull <- hobo |> 
+    dplyr::select(Station, Date, Time, WaterTemperature_C, WaterLevel_meters, River.Name) |> 
+  distinct() |> 
+  filter(River.Name == "Terra Nova River") |> 
+  filter(year(Date) == 2023) |> 
+  filter(month(Date) >= 6 & month(Date) <= 9) |> 
+  ggplot() +
+  geom_hline(yintercept = 20, linetype = 'dashed', colour = 'red') +
+  geom_line(aes(x = Time, y = WaterLevel_meters*10 +20, colour = "Water Level")) +
+  geom_line(aes( x = Time, y = WaterTemperature_C, colour = "Water Temperature")) +
+  labs(x = "Time", 
+       y = "Temperature (°C)") +
+  theme_bw() +
+  scale_y_continuous(sec.axis = sec_axis(name = "Water Level (m)",
+                                         trans = ~(.x - 20)/10)) +
+    scale_x_datetime(date_labels = "%d-%b-%y") +
+  scale_colour_manual( name = "Recording",
+                       breaks = c( 'Water Temperature', 'Air Temperature', 'Water Level' ),
+                       values = c( 'Water Temperature' = 'black',
+                                   'Air Temperature' = 'darkred', 
+                                   'Water Level' = 'blue' ) ) +
+  theme(legend.position = "bottom")
+
+TNfull
+
+# hobo |> 
+#   filter(River.Name == "Terra Nova River") |> 
+#   filter(year(Date) == 2023) |>
+#   dplyr::select(River.Name, Station, Time, Date, WaterTemperature_C) |> 
+#   mutate(above20 = 0,
+#          above20 = replace(above20, WaterTemperature_C > 20, 1)) |> 
+#   filter(above20 == 1) |> 
+#   group_by(Station) |> 
+#   mutate(duration = difftime(Time, lag(Time), units = "hours"))
+
+TN1 <- hobo |> 
+    dplyr::select(Station, Date, Time, WaterTemperature_C, WaterLevel_meters, River.Name) |> 
+  distinct() |> 
+  filter(River.Name == "Terra Nova River") |> 
+  filter(year(Date) == 2023) |> 
+  filter(month(Date) >= 6 & month(Date) <= 9) |> 
+  filter(Date >= as_date("2023-07-06") & Date <= ("2023-07-17")) |> 
+  ggplot() +
+  geom_hline(yintercept = 20, linetype = 'dashed', colour = 'red') +
+  geom_line(aes(x = Time, y = WaterLevel_meters*10 +20, colour = "Water Level")) +
+  geom_line(aes( x = Time, y = WaterTemperature_C, colour = "Water Temperature")) +
+  labs(x = "Time", 
+       y = "Temperature (°C)") +
+  theme_bw() +
+  scale_y_continuous(sec.axis = sec_axis(name = "Water Level (m)",
+                                         trans = ~(.x - 20)/10)) +
+    scale_x_datetime(date_labels = "%d-%b-%y", breaks = "1 day") +
+  scale_colour_manual( name = "Recording",
+                       breaks = c( 'Water Temperature', 'Air Temperature', 'Water Level' ),
+                       values = c( 'Water Temperature' = 'black',
+                                   'Air Temperature' = 'darkred', 
+                                   'Water Level' = 'blue' ) ) +
+  theme(legend.position = "bottom")
+
+TN1
+
+TN1.2 <- TN1 + 
+  geom_point(data = Alarms[2,],
+             aes(x = Time, y = 20), shape = 7, size = 5, colour = 'black') +
+  geom_point(data = Alarms[2,],
+             aes(x = Alarm.On, y = TempStart), shape = 13, size = 5, colour = 'red')
+
+TN1.2
+
+TN2 <- hobo |> 
+    dplyr::select(Station, Date, Time, WaterTemperature_C, WaterLevel_meters, River.Name) |> 
+  distinct() |> 
+  filter(River.Name == "Terra Nova River") |> 
+  filter(year(Date) == 2023) |> 
+  filter(month(Date) >= 6 & month(Date) <= 9) |> 
+  filter(Date >= as_date("2023-07-12") & Date <= ("2023-08-10")) |> 
+  ggplot() +
+  geom_hline(yintercept = 20, linetype = 'dashed', colour = 'red') +
+  geom_line(aes(x = Time, y = WaterLevel_meters*10 +20, colour = "Water Level")) +
+  geom_line(aes( x = Time, y = WaterTemperature_C, colour = "Water Temperature")) +
+  labs(x = "Time", 
+       y = "Temperature (°C)") +
+  theme_bw() +
+  scale_y_continuous(sec.axis = sec_axis(name = "Water Level (m)",
+                                         trans = ~(.x - 20)/10)) +
+    scale_x_datetime(date_labels = "%d-%b-%y", breaks = "1 week") +
+  scale_colour_manual( name = "Recording",
+                       breaks = c( 'Water Temperature', 'Air Temperature', 'Water Level' ),
+                       values = c( 'Water Temperature' = 'black',
+                                   'Air Temperature' = 'darkred', 
+                                   'Water Level' = 'blue' ) ) +
+  theme(legend.position = "bottom")
+
+TN2
+
+TN2.2 <- TN2 + 
+  geom_point(data = Alarms[2,],
+             aes(x = Alarm.On, y = TempStart), shape = 13, size = 5, colour = 'red') +
+  geom_point(data = Alarms[2,],
+             aes(x = Alarm.Off, y = TempStop), shape = 1, size = 6, colour = 'darkgreen')
+
+
+TN2.2
+
+
+ggsave(TNfull, file = "./output/figures/terranovafull.png", device = "png", height = 6, width = 10, unit = "in")
+
+ggsave(TN1, file = "./output/figures/TN1.png", device = "png", height = 6, width = 10, unit = "in")
+
+ggsave(TN1.2, file = "./output/figures/TN1_2.png", device = "png", height = 6, width = 10, unit = "in")
+
+ggsave(TN2, file = "./output/figures/TN2.png", device = "png", height = 6, width = 10, unit = "in")
+
+ggsave(TN2.2, file = "./output/figures/TN2_2.png", device = "png", height = 6, width = 10, unit = "in")
+```
+
+```{r shinneys example, echo = FALSE, warning = FALSE, eval = FALSE}
+
+
+
+
+
+### threshold days
+
+Start1 <- hobo |> 
+  dplyr::select(Station, Date, Time, WaterTemperature_C, WaterLevel_meters, River.Name) |> 
+  distinct() |> 
+  filter(Station == "Shinneys") |> 
+  filter(!is.na(WaterTemperature_C)) |> 
+  filter(year(Date) == 2023) |> 
+    filter(month(Date) >= 6 & month(Date) <= 9) |> 
+  filter(WaterTemperature_C > 20) |> 
+  filter(Time == min(Time)) |> 
+  mutate(state = "initial") |> 
+  mutate(Alarm.On = Time + duration(3, units = "days")) |> 
+  dplyr::select(Time, Alarm.On)
+  
+Period1 <- hobo |> 
+  dplyr::select(Station, Date, Time, WaterTemperature_C, WaterLevel_meters, River.Name) |> 
+  distinct() |> 
+  filter(Station == "Shinneys") |> 
+  filter(Time >= Start1$Time & Time <= Start1$Alarm.On) |> 
+  mutate(check = WaterTemperature_C > 20) |> 
+  filter(check == FALSE) |> 
+  filter(Time == min(Time))
+Period1
+
+
+Temp1 <- hobo |> 
+    dplyr::select(Station, Date, Time, WaterTemperature_C, WaterLevel_meters, River.Name) |> 
+  distinct() |> 
+  filter(Station == "Shinneys") |> 
+  filter(Time == Start1$Alarm.On) |> 
+  dplyr::select(WaterTemperature_C) 
+
+Stop1 <- hobo |> 
+  dplyr::select(Station, Date, Time, WaterTemperature_C, WaterLevel_meters, River.Name) |> 
+  distinct() |> 
+  filter(Station == "Shinneys") |> 
+  filter(Time >= Start1$Alarm.On) |> 
+  filter(WaterTemperature_C <= 20) |> 
+  filter(Time == min(Time)) |> 
+  rename(Alarm.Off = Time) |> 
+  dplyr::select(Alarm.Off, WaterTemperature_C)
+
+
+Start2 <- hobo |> 
+  dplyr::select(Station, Date, Time, WaterTemperature_C, WaterLevel_meters, River.Name) |> 
+  distinct() |> 
+  filter(Station == "Shinneys") |> 
+  filter(Time >= Stop1$Alarm.Off) |> 
+  filter(WaterTemperature_C > 20) |> 
+  filter(Time == min(Time)) |> 
+  mutate(state = "initial") |> 
+  mutate(Alarm.On = Time + duration(3, units = "days")) |> 
+  dplyr::select(Time, Alarm.On)
+
+Period2 <-  hobo |> 
+  dplyr::select(Station, Date, Time, WaterTemperature_C, WaterLevel_meters, River.Name) |> 
+  distinct() |> 
+  filter(Station == "Shinneys") |> 
+  filter(Time >= Start2$Time & Time <= Start2$Alarm.On) |> 
+  mutate(check = WaterTemperature_C > 20) |> 
+  filter(check == FALSE) |> 
+  filter(Time == min(Time))
+
+Start2$Alarm.On <- NA
+## no start 2 alarm
+
+Alarms <- bind_cols(Start1, Stop1) |> 
+  rename(TempStop = WaterTemperature_C) |> 
+  bind_cols(Temp1) |> 
+  rename(TempStart = WaterTemperature_C)
+
+
+# Alarms <- bind_rows(Start1, Start2, Start3, Start4, Start5, Start6) |> 
+#   filter(!is.na(Alarm.On)) |> 
+#   bind_cols(bind_rows(Stop1, Stop6)) |> 
+#   rename(TempStop = WaterTemperature_C) |> 
+#   bind_cols(bind_rows(Temp1, Temp6)) |> 
+#   rename(TempStart = WaterTemperature_C)
+## Shinneys
+
+SHINfull <- hobo |> 
+    dplyr::select(Station, Date, Time, WaterTemperature_C, WaterLevel_meters, River.Name) |> 
+  distinct() |> 
+  filter(!is.na(WaterTemperature_C)) |> 
+  filter(Station == "Shinneys") |> 
+  filter(year(Date) == 2023) |> 
+  filter(month(Date) >= 6 & month(Date) <= 9) |> 
+  ggplot() +
+  geom_hline(yintercept = 20, linetype = 'dashed', colour = 'red') +
+  geom_line(aes(x = Time, y = WaterLevel_meters*10 +20, colour = "Water Level")) +
+  geom_line(aes( x = Time, y = WaterTemperature_C, colour = "Water Temperature")) +
+  labs(x = "Time", 
+       y = "Temperature (°C)") +
+  theme_bw() +
+  scale_y_continuous(sec.axis = sec_axis(name = "Water Level (m)",
+                                         trans = ~(.x - 20)/10)) +
+    scale_x_datetime(date_labels = "%d-%b-%y") +
+  scale_colour_manual( name = "Recording",
+                       breaks = c( 'Water Temperature', 'Air Temperature', 'Water Level' ),
+                       values = c( 'Water Temperature' = 'black',
+                                   'Air Temperature' = 'darkred', 
+                                   'Water Level' = 'blue' ) ) +
+  theme(legend.position = "bottom")
+
+
+SHINfull
+# hobo |> 
+#   filter(River.Name == "Terra Nova River") |> 
+#   filter(year(Date) == 2023) |>
+#   dplyr::select(River.Name, Station, Time, Date, WaterTemperature_C) |> 
+#   mutate(above20 = 0,
+#          above20 = replace(above20, WaterTemperature_C > 20, 1)) |> 
+#   filter(above20 == 1) |> 
+#   group_by(Station) |> 
+#   mutate(duration = difftime(Time, lag(Time), units = "hours"))
+
+SH1 <- hobo |> 
+    dplyr::select(Station, Date, Time, WaterTemperature_C, WaterLevel_meters, River.Name) |> 
+  distinct() |> 
+ filter(Station == "Shinneys") |> 
+  filter(year(Date) == 2023) |> 
+  filter(month(Date) >= 6 & month(Date) <= 9) |> 
+    filter(!is.na(WaterTemperature_C)) |> 
+  filter(Date >= as_date("2023-07-10") & Date <= ("2023-07-20")) |> 
+  ggplot() +
+  geom_hline(yintercept = 20, linetype = 'dashed', colour = 'red') +
+  geom_line(aes(x = Time, y = WaterLevel_meters*10 +20, colour = "Water Level")) +
+  geom_line(aes( x = Time, y = WaterTemperature_C, colour = "Water Temperature")) +
+  labs(x = "Time", 
+       y = "Temperature (°C)") +
+  theme_bw() +
+  scale_y_continuous(sec.axis = sec_axis(name = "Water Level (m)",
+                                         trans = ~(.x - 20)/10)) +
+    scale_x_datetime(date_labels = "%d-%b-%y", breaks = "1 day") +
+  scale_colour_manual( name = "Recording",
+                       breaks = c( 'Water Temperature', 'Air Temperature', 'Water Level' ),
+                       values = c( 'Water Temperature' = 'black',
+                                   'Air Temperature' = 'darkred', 
+                                   'Water Level' = 'blue' ) ) +
+  theme(legend.position = "bottom")
+
+SH1
+
+SH1.2 <- SH1 + 
+  geom_point(data = Alarms,
+             aes(x = Time, y = 20), shape = 7, size = 5, colour = 'black') +
+  geom_point(data = Alarms,
+             aes(x = Alarm.On, y = TempStart), shape = 13, size = 5, colour = 'red')
+
+SH1.2
+
+SH2 <- hobo |> 
+    dplyr::select(Station, Date, Time, WaterTemperature_C, WaterLevel_meters, River.Name) |> 
+  distinct() |> 
+ filter(Station == "Shinneys") |> 
+  filter(year(Date) == 2023) |> 
+  filter(month(Date) >= 6 & month(Date) <= 9) |> 
+    filter(!is.na(WaterTemperature_C)) |> 
+  filter(Date >= as_date("2023-07-13") & Date <= ("2023-07-31")) |> 
+  ggplot() +
+  geom_hline(yintercept = 20, linetype = 'dashed', colour = 'red') +
+  geom_line(aes(x = Time, y = WaterLevel_meters*10 +20, colour = "Water Level")) +
+  geom_line(aes( x = Time, y = WaterTemperature_C, colour = "Water Temperature")) +
+  labs(x = "Time", 
+       y = "Temperature (°C)") +
+  theme_bw() +
+  scale_y_continuous(sec.axis = sec_axis(name = "Water Level (m)",
+                                         trans = ~(.x - 20)/10)) +
+    scale_x_datetime(date_labels = "%d-%b-%y", breaks = "1 week") +
+  scale_colour_manual( name = "Recording",
+                       breaks = c( 'Water Temperature', 'Air Temperature', 'Water Level' ),
+                       values = c( 'Water Temperature' = 'black',
+                                   'Air Temperature' = 'darkred', 
+                                   'Water Level' = 'blue' ) ) +
+  theme(legend.position = "bottom")
+SH2
+
+SH2.2 <- SH2 + 
+geom_point(data = Alarms,
+             aes(x = Alarm.On, y = TempStart), shape = 13, size = 5, colour = 'red') +
+  geom_point(data = Alarms,
+             aes(x = Alarm.Off, y = TempStop), shape = 1, size = 6, colour = 'darkgreen')
+
+SH2.2
+
+
+
+
+ggsave(SHINfull, file = "./output/figures/shinneysfull.png", device = "png", height = 6, width = 10, unit = "in")
+
+ggsave(SH1, file = "./output/figures/SH1.png", device = "png", height = 6, width = 10, unit = "in")
+
+ggsave(SH1.2, file = "./output/figures/SH1_2.png", device = "png", height = 6, width = 10, unit = "in")
+
+ggsave(SH2, file = "./output/figures/SH2.png", device = "png", height = 6, width = 10, unit = "in")
+
+ggsave(SH2.2, file = "./output/figures/SH2_2.png", device = "png", height = 6, width = 10, unit = "in")
+```
+
+
+### Map
+(same as above, will fill in missing lat/longs and update group for loggers)
+```{r map, echo = FALSE}
+# ---- detailed map ----
+
+# mapcanada <- gadm("canada", level = 1, path = ".", version = "latest")
+# 
+# mapcan_sf <- st_as_sf(mapcanada)
+# 
+# b <- opq(bbox = c(-61.06, 46.71, -52.95, 55.62)) |>
+#   add_osm_features(features = list( "water" = "river",
+#                                     "water" = "stream")) |>
+#   osmdata_sf()
+cols <- c("Water" = "blue", "Level" = "purple", "Hobo Weather Station" = 'orange')
+ggplot(mapcan_sf) +
+  geom_sf() +
+  # geom_sf(data = b$osm_multipolygons, aes()) +
+  geom_point(data = loggers |> filter(Recording != "Air"), 
+             aes( x = Long, y = Lat, fill = Recording),
+             size = 1.5, alpha = 0.85, colour = alpha('black', 1), shape = 21) +
+  xlim(-61.1, -52.9) +
+  ylim(46.7, 55.65) +
+  theme_bw() +
+  labs(x = "Latitude",
+       y = "Longitude",
+       fill = "Recording",
+       shape = "Group") +
+  theme(panel.grid = element_blank(),
+        axis.title = element_text(size = 11),
+        axis.text = element_text(size = 10)) +
+  scale_fill_manual(name = "Recording",
+                    values = cols,
+                    guide = guide_legend(override.aes = list(shape = 21, color = 'black'))) #+
+  # scale_shape_manual(name = "Group",
+  #                    labels = c("CAFE", "C&P","FABEC", "SAEN", "AROC", "NCC"),
+  #                    values = c(21, 22, 23, 24, 25, 15),
+  #                    guide = guide_legend(override.aes = list(fill = 'white')))
+
+ggsave("./output/map-figures/all-loggers.png", device = "png", height = 8, width = 8, units = "in")
+
+
+
+```
+
+### Logger deployements
+```{r logger deployement, echo = FALSE, message = FALSE}
+
+table1 <- kable(loggers |>
+        filter(Recording != "Air") |> 
+        group_by(Recording) |>
+        summarise(N=n()),
+  colnames = c("Equipment", "N"),
+  align = 'c',
+  linesep = "",
+  booktabs= TRUE) |> 
+  kable_classic("striped", full_width = F, font_size = 28)
+
+table1
+# save_kable(table1, file = "./output/tables/loggertable.jpg")
+
+```
+
+```{r summary stats, message = FALSE, echo = FALSE, message = FALSE}
+# ----- summary statistics -----
+
+# Group by detachments
+detach <- read.csv("./data-working/Copy of CnP Detachments and Rivers.csv") |> 
+  rename(River.Number = River.No.)
+
+# total hours recorded for each river each month
+monthly_hours <- water |>
+  left_join(detach) |> 
+  # filter(!is.na(Temp.C)) |>
+  mutate(month = month(Time)) |>
+  group_by(Station, Serial, Recording, Year, month, Detachment, River.Number) |>
+  summarise(total_hours = n()) |>
+  ungroup()
+
+monthly_days <- water |>
+  left_join(detach) |> 
+  # filter(!is.na(Temp.C)) |>
+  mutate(month = month(Time),
+         Day = date(Time)) |>
+  distinct(Station, Serial, Recording, Year, month, Day) |>
+  group_by(Station, Serial, Recording, Year, month) |>
+  summarise(total_days = n()) |>
+  ungroup()
+
+
+
+```
+
+
+
+### Overall summary 
+
+```{r overall summary by month, message = FALSE, warning = FALSE, echo = FALSE}
+
+
+# total hours recorded for each river each month
+# monthly_hours
+
+## fromlabrador summary
+# above20Lab2 <- above20Lab |> 
+#   group_by(threshold, Year, MonthName) |> 
+#   summarise(Percent2 = mean(Percent), SD = sd(Percent), N = n()) |> 
+#   ungroup() |> 
+#   rename(Percent = Percent2) |> 
+#   mutate(Detachment = "Goose Bay") |> 
+#   filter(threshold == "above") |> 
+#   filter(Year >= 2022) |> 
+#   mutate(month = 5,
+#          month = replace(month, MonthName == "Jun", 6),
+#          month = replace(month, MonthName == "Jul", 7),
+#          month = replace(month, MonthName == "Aug", 8),
+#          month = replace(month, MonthName == "Sep", 9))
+  
+
+# percent of total time above 20 °C per month (6, 7, 8, 9) by sfa**
+## group SFA1 and SFA2 together
+## group NL together
+# 20 C
+above20 <- water |>
+  left_join(detach) |> 
+    mutate(Detachment = replace(Detachment, is.na(Detachment) & River.Name == "St. Shotts River", "Bay Roberts")) |> 
+  # filter(!is.na(Temp.C)) |>
+  mutate(month = month(Time),
+         MonthName = month(Time, label = TRUE),
+         threshold = 'below') |>
+  mutate(threshold = replace(threshold, Temp.C > 20, 'above')) |>
+  group_by(threshold, Station, Serial, Recording, Year, month, Detachment, MonthName) |>
+  summarise(hours = n()) |>
+  ungroup() |>
+  left_join(monthly_hours) |>
+  ## only use for months with > 15 days of data recorded (720 hrs)
+  filter(total_hours > 360) |>
+  mutate(percent_hours = hours/total_hours*100) |>
+  filter(Year >= 2022) |>
+  # filter(threshold == "above") |>
+  filter(month == 5 | month == 6 | month == 7 | month == 8 | month == 9) |> 
+  # filter(!is.na(SFA)) |> 
+  group_by(threshold, Detachment, Year, month, MonthName) |>
+  summarise(Percent = mean(percent_hours), SD = sd(percent_hours), N= n()) |>
+  ungroup() |> 
+  filter(threshold == "above") |> 
+  filter(!is.na(Detachment)) 
+  # bind_rows(above20Lab2)
+
+
+# 
+# ## fromlabrador summary
+# above25Lab2 <- above25Lab |> 
+#   group_by(threshold, Year, MonthName) |> 
+#   summarise(Percent2 = mean(Percent), SD = sd(Percent), N = n()) |> 
+#   ungroup() |> 
+#   rename(Percent = Percent2) |> 
+#   mutate(Detachment = "Goose Bay") |> 
+#   filter(threshold == "above") |> 
+#   filter(Year >= 2022) |> 
+#   mutate(month = 5,
+#          month = replace(month, MonthName == "Jun", 6),
+#          month = replace(month, MonthName == "Jul", 7),
+#          month = replace(month, MonthName == "Aug", 8),
+#          month = replace(month, MonthName == "Sep", 9))
+  
+
+# percent of total time above 24 °C per month by SFA**
+# 24 C
+above25 <- water |>
+  left_join(detach) |> 
+    mutate(Detachment = replace(Detachment, is.na(Detachment) & River.Name == "St. Shotts River", "Bay Roberts")) |> 
+  filter(!is.na(Temp.C)) |>
+  mutate(month = month(Time),
+         MonthName = month(Time, label = TRUE),
+         threshold = 'below') |>
+  mutate(threshold = replace(threshold, Temp.C > 25, 'above')) |>
+  group_by(threshold, Station, Serial, Recording, Year, month, MonthName, Detachment) |>
+  summarise(hours = n()) |>
+  ungroup() |>
+  left_join(monthly_hours) |>
+  ## only use for months with > 15 days of data recorded (720 hrs)
+  filter(total_hours > 360) |>
+  mutate(percent_hours = hours/total_hours*100) |>
+  filter(Year >= 2022) |>
+  # filter(threshold == "above") |>
+  filter(month == 6 | month == 7 | month == 8 | month == 9) |> 
+  group_by(threshold, Detachment, Year, month, MonthName) |>
+  summarise(Percent = mean(percent_hours), SD = sd(percent_hours), N= n()) |>
+  ungroup() |>   
+  filter(threshold == "above") |> 
+  filter(!is.na(Detachment)) 
+
+```
+
+
+```{r full summary, echo = FALSE, message = FALSE}
+## daily stats
+daily <- water |> 
+    left_join(detach) |> 
+    mutate(Detachment = replace(Detachment, is.na(Detachment) & River.Name == "St. Shotts River", "Bay Roberts")) |> 
+  group_by(Station, River.Number, Detachment, Date) |> 
+  summarise(Daily_Temp = mean(Temp.C, na.rm = TRUE), sd_Temp = sd(Temp.C, na.rm = TRUE),
+            Tmax = max(Temp.C, na.rm = TRUE), Tmin = min(Temp.C, na.rm = TRUE)) |> 
+  ungroup() |> 
+  mutate(month = month(Date)) |>
+  filter(Station != "Amy's Lake") |> 
+  filter(!is.na(River.Number)) |> 
+  # filter(!is.na(SFA)) |> 
+  mutate(year = year(Date)) |> 
+  filter(!is.na(Daily_Temp))
+
+
+monthly <- daily |> 
+  # filter(!is.na(SFA)) |> 
+  filter(Station != "Amy's Lake") |>
+  filter(!is.na(River.Number)) |> 
+  # remove stations with less than 15 days within a month
+  group_by(Station, River.Number, year, Detachment, month) |> 
+  mutate(Days = n()) |> 
+  ungroup() |> 
+  filter(Days >= 15) |>
+  # monthly stats by SFA 
+  mutate(Month = month(Date, label = TRUE)) |> 
+  group_by(Detachment, year, month, Month) |> 
+  summarise(Mean_Temp = mean(Daily_Temp, na.rm = TRUE), TempSD = sd(Daily_Temp, na.rm = TRUE),
+            Max = mean(Tmax, na.rm = TRUE), MaxSD = sd(Tmax, na.rm = TRUE), Min = mean(Tmin, na.rm = TRUE), MinSD = sd(Tmin, na.rm = TRUE)) |> 
+  ungroup() |> 
+  # mutate(Date = my(paste(month, year, sep = "-"))) |> 
+  filter(year >= 2022) |>
+  filter(month == 5 | month == 6 | month == 7 | month == 8 | month == 9) |> 
+  mutate(Date = ymd(paste(year, month,15)))
+
+
+
+
+
+```
+
+```{r temperature analysis, echo=FALSE, message=FALSE, warning=FALSE, }
+library(mgcv)
+library(DHARMa)
+library(lme4)
+library(car)
+
+monthly$fYear <- factor(monthly$year)
+monthly$fMonth <- factor(monthly$month)
+# daily <- daily |> 
+#   group_by(year) |> 
+#   mutate(Day = yday(Date) - min(yday(Date)) + 1) |> 
+#   ungroup()
+
+
+temp.m1 <- gam(Mean_Temp ~ Detachment+fYear+s(month, by = fYear, bs = "cr", k = 4),
+               data = monthly,
+               method = "REML")
+# summary(temp.m1)
+# anova(temp.m1)
+
+```
+
+```{r regional, echo = FALSE, message = FALSE}
+
+
+# library(ggh4x)
+
+facet_bounds <- data.frame(year = c("2022", "2023", "2024"),
+                           xmin = c(as_date("2022-05-01"), as_date("2023-05-01"), as_date("2024-05-01")),
+                           xmax = c(as_date("2022-10-01"), as_date("2023-10-01"), as_date("2024-10-01")))
+facet_scales <-split(facet_bounds, facet_bounds$year)
+
+scales <- lapply(facet_scales, function(a) {
+  scale_x_date(limits = c(a$xmin, a$xmax))
+})
+
+
+p1a <- ggplot() +
+  geom_hline(yintercept = 20, linetype = 'dashed', colour = 'red') +
+  ## daily trends
+  geom_smooth(data = daily |>  
+                filter(Detachment == "Bay Roberts") |> 
+                filter(month == 5 | month == 6 | month == 7 | month == 8 | month == 9), 
+              aes(x = Date, y = Tmin), colour = 'blue') +
+  geom_smooth(data = daily |>                 
+                filter(Detachment == "Bay Roberts") |> 
+                filter(month == 5 | month == 6 | month == 7 | month == 8 | month == 9), 
+              aes(x = Date, y = Tmax), colour = 'orange') +
+  geom_smooth(data = daily |> 
+                filter(Detachment == "Bay Roberts") |> 
+                filter(month == 5 | month == 6 | month == 7 | month == 8 | month == 9), 
+              aes(x = Date, y = Daily_Temp), colour = 'black') +
+  facet_wrap(~year, scales = "free_x") +
+  ggh4x::facetted_pos_scales(x = scales) +
+  theme_bw() +
+  scale_fill_manual(values = c("Mean" = 'black', 
+                               "Max" = 'orange', 
+                               "Min" = 'blue')) +
+    labs(y = "Water Temperature (°C)",
+       x = "Month",
+       fill = "",
+       title = "Avalon Region - Daily Temperature") +
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5)) +
+  ylim(0,30)
+
+p1b <- ggplot() +
+  geom_hline(yintercept = 20, linetype = 'dashed', colour = 'red') +
+  ## monthly trends
+  geom_errorbar(data = monthly |> 
+                  filter(Detachment == "Bay Roberts"),
+                aes(x = Date + duration(7, units = "days"), 
+                    ymin = Min-MinSD,
+                    ymax = Min+MinSD),
+                width = 4) +
+  geom_point(data = monthly |> 
+               filter(Detachment == "Bay Roberts"),
+             aes(x = Date+duration(7, units = "days"), y = Min, fill = "Min"), shape = 22, size = 2) +
+   geom_errorbar(data = monthly |> 
+                  filter(Detachment == "Bay Roberts"),
+                aes(x = Date - duration(7, units = "days"), 
+                    ymin = Max-MaxSD,
+                    ymax = Max+MaxSD),
+                width = 4) +
+  geom_point(data = monthly |> 
+               filter(Detachment == "Bay Roberts"),
+             aes(x = Date - duration(7, units = "days"), y = Max, fill = "Max"), shape = 22, size = 2) +
+   geom_errorbar(data = monthly |> 
+                  filter(Detachment == "Bay Roberts"),
+                aes(x = Date, 
+                    ymin = Mean_Temp-TempSD,
+                    ymax = Mean_Temp+TempSD),
+                width = 4) +
+    geom_point(data = monthly |> 
+                 filter(Detachment == "Bay Roberts"),
+               aes(x = Date, y = Mean_Temp, fill = "Mean"), shape = 22, size = 2) +
+  facet_wrap(~year, scales = "free_x") +
+  ggh4x::facetted_pos_scales(x = scales) +
+  theme_bw() +
+  scale_fill_manual(values = c("Mean" = 'black', 
+                               "Max" = 'orange', 
+                               "Min" = 'blue')) +
+    labs(y = "Water Temperature (°C)",
+       x = "Month",
+       fill = "",
+       title = "Avalon Region - Monthly Temperature") +
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5)) +
+  ylim(0,30)
+
+p1 <- ggarrange(p1a, p1b, ncol = 1, common.legend = TRUE, legend = "bottom")
+
+p2a <- ggplot() +
+  geom_hline(yintercept = 20, linetype = 'dashed', colour = 'red') +
+  ## daily trends
+  geom_smooth(data = daily |>  
+                filter(Detachment == "Clarenville") |> 
+                filter(month == 5 | month == 6 | month == 7 | month == 8 | month == 9), 
+              aes(x = Date, y = Tmin), colour = 'blue') +
+  geom_smooth(data = daily |>                 
+                filter(Detachment == "Clarenville") |> 
+                filter(month == 5 | month == 6 | month == 7 | month == 8 | month == 9), 
+              aes(x = Date, y = Tmax), colour = 'orange') +
+  geom_smooth(data = daily |> 
+                filter(Detachment == "Clarenville") |> 
+                filter(month == 5 | month == 6 | month == 7 | month == 8 | month == 9), 
+              aes(x = Date, y = Daily_Temp), colour = 'black') +
+  facet_wrap(~year, scales = "free_x") +
+  ggh4x::facetted_pos_scales(x = scales) +
+  theme_bw() +
+  scale_fill_manual(values = c("Mean" = 'black', 
+                               "Max" = 'orange', 
+                               "Min" = 'blue')) +
+    labs(y = "Water Temperature (°C)",
+       x = "Month",
+       fill = "",
+       title = "Northeast Region - Daily Temperature") +
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5)) +
+  ylim(0,30)
+
+p2b <- ggplot() +
+  geom_hline(yintercept = 20, linetype = 'dashed', colour = 'red') +
+  ## monthly trends
+  geom_errorbar(data = monthly |> 
+                  filter(Detachment == "Clarenville"),
+                aes(x = Date + duration(7, units = "days"), 
+                    ymin = Min-MinSD,
+                    ymax = Min+MinSD),
+                width = 4) +
+  geom_point(data = monthly |> 
+               filter(Detachment == "Clarenville"),
+             aes(x = Date+duration(7, units = "days"), y = Min, fill = "Min"), shape = 22, size = 2) +
+   geom_errorbar(data = monthly |> 
+                  filter(Detachment == "Clarenville"),
+                aes(x = Date - duration(7, units = "days"), 
+                    ymin = Max-MaxSD,
+                    ymax = Max+MaxSD),
+                width = 4) +
+  geom_point(data = monthly |> 
+               filter(Detachment == "Clarenville"),
+             aes(x = Date - duration(7, units = "days"), y = Max, fill = "Max"), shape = 22, size = 2) +
+   geom_errorbar(data = monthly |> 
+                  filter(Detachment == "Clarenville"),
+                aes(x = Date, 
+                    ymin = Mean_Temp-TempSD,
+                    ymax = Mean_Temp+TempSD),
+                width = 4) +
+    geom_point(data = monthly |> 
+                 filter(Detachment == "Clarenville"),
+               aes(x = Date, y = Mean_Temp, fill = "Mean"), shape = 22, size = 2) +
+  facet_wrap(~year, scales = "free_x") +
+  ggh4x::facetted_pos_scales(x = scales) +
+  theme_bw() +
+  scale_fill_manual(values = c("Mean" = 'black', 
+                               "Max" = 'orange', 
+                               "Min" = 'blue')) +
+    labs(y = "Water Temperature (°C)",
+       x = "Month",
+       fill = "",
+       title = "Northeast Region - Monthly Temperature") +
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5)) +
+  ylim(0,30)
+
+p2 <- ggarrange(p2a, p2b, ncol = 1, common.legend = TRUE, legend = "bottom")
+
+
+p3a <- ggplot() +
+  geom_hline(yintercept = 20, linetype = 'dashed', colour = 'red') +
+  ## daily trends
+  geom_smooth(data = daily |>  
+                filter(Detachment == "Twillingate") |> 
+                filter(month == 5 | month == 6 | month == 7 | month == 8 | month == 9), 
+              aes(x = Date, y = Tmin), colour = 'blue') +
+  geom_smooth(data = daily |>                 
+                filter(Detachment == "Twillingate") |> 
+                filter(month == 5 | month == 6 | month == 7 | month == 8 | month == 9), 
+              aes(x = Date, y = Tmax), colour = 'orange') +
+  geom_smooth(data = daily |> 
+                filter(Detachment == "Twillingate") |> 
+                filter(month == 5 | month == 6 | month == 7 | month == 8 | month == 9), 
+              aes(x = Date, y = Daily_Temp), colour = 'black') +
+  facet_wrap(~year, scales = "free_x") +
+  ggh4x::facetted_pos_scales(x = scales) +
+  theme_bw() +
+  scale_fill_manual(values = c("Mean" = 'black', 
+                               "Max" = 'orange', 
+                               "Min" = 'blue')) +
+    labs(y = "Water Temperature (°C)",
+       x = "Month",
+       fill = "",
+       title = "Central (East) Region - Daily Temperature") +
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5)) +
+  ylim(0,30)
+
+p3b <- ggplot() +
+  geom_hline(yintercept = 20, linetype = 'dashed', colour = 'red') +
+    ## monthly trends
+  geom_errorbar(data = monthly |> 
+                  filter(Detachment == "Twillingate"),
+                aes(x = Date + duration(7, units = "days"), 
+                    ymin = Min-MinSD,
+                    ymax = Min+MinSD),
+                width = 4) +
+  geom_point(data = monthly |> 
+               filter(Detachment == "Twillingate"),
+             aes(x = Date+duration(7, units = "days"), y = Min, fill = "Min"), shape = 22, size = 2) +
+   geom_errorbar(data = monthly |> 
+                  filter(Detachment == "Twillingate"),
+                aes(x = Date - duration(7, units = "days"), 
+                    ymin = Max-MaxSD,
+                    ymax = Max+MaxSD),
+                width = 4) +
+  geom_point(data = monthly |> 
+               filter(Detachment == "Twillingate"),
+             aes(x = Date - duration(7, units = "days"), y = Max, fill = "Max"), shape = 22, size = 2) +
+   geom_errorbar(data = monthly |> 
+                  filter(Detachment == "Twillingate"),
+                aes(x = Date, 
+                    ymin = Mean_Temp-TempSD,
+                    ymax = Mean_Temp+TempSD),
+                width = 4) +
+    geom_point(data = monthly |> 
+                 filter(Detachment == "Twillingate"),
+               aes(x = Date, y = Mean_Temp, fill = "Mean"), shape = 22, size = 2) +
+  facet_wrap(~year, scales = "free_x") +
+  ggh4x::facetted_pos_scales(x = scales) +
+  theme_bw() +
+  scale_fill_manual(values = c("Mean" = 'black', 
+                               "Max" = 'orange', 
+                               "Min" = 'blue')) +
+    labs(y = "Water Temperature (°C)",
+       x = "Month",
+       fill = "",
+       title = "Central (East) Region - Monthly Temperature") +
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5)) +
+  ylim(0,30)
+
+p3 <- ggarrange(p3a, p3b, ncol = 1, common.legend = TRUE, legend = "bottom")
+
+p4a <- ggplot() +
+  geom_hline(yintercept = 20, linetype = 'dashed', colour = 'red') +
+  ## daily trends
+  geom_smooth(data = daily |>  
+                filter(Detachment == "Springdale") |> 
+                filter(month == 5 | month == 6 | month == 7 | month == 8 | month == 9), 
+              aes(x = Date, y = Tmin), colour = 'blue') +
+  geom_smooth(data = daily |>                 
+                filter(Detachment == "Springdale") |> 
+                filter(month == 5 | month == 6 | month == 7 | month == 8 | month == 9), 
+              aes(x = Date, y = Tmax), colour = 'orange') +
+  geom_smooth(data = daily |> 
+                filter(Detachment == "Springdale") |> 
+                filter(month == 5 | month == 6 | month == 7 | month == 8 | month == 9), 
+              aes(x = Date, y = Daily_Temp), colour = 'black') +
+  facet_wrap(~year, scales = "free_x") +
+  ggh4x::facetted_pos_scales(x = scales) +
+  theme_bw() +
+  scale_fill_manual(values = c("Mean" = 'black', 
+                               "Max" = 'orange', 
+                               "Min" = 'blue')) +
+    labs(y = "Water Temperature (°C)",
+       x = "Month",
+       fill = "",
+       title = "Central (West) Region - Daily Temperature") +
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5)) +
+  ylim(0,30)
+
+p4b <- ggplot() +
+  geom_hline(yintercept = 20, linetype = 'dashed', colour = 'red') +
+   ## monthly trends
+  geom_errorbar(data = monthly |> 
+                  filter(Detachment == "Springdale"),
+                aes(x = Date + duration(7, units = "days"), 
+                    ymin = Min-MinSD,
+                    ymax = Min+MinSD),
+                width = 4) +
+  geom_point(data = monthly |> 
+               filter(Detachment == "Springdale"),
+             aes(x = Date+duration(7, units = "days"), y = Min, fill = "Min"), shape = 22, size = 2) +
+   geom_errorbar(data = monthly |> 
+                  filter(Detachment == "Springdale"),
+                aes(x = Date - duration(7, units = "days"), 
+                    ymin = Max-MaxSD,
+                    ymax = Max+MaxSD),
+                width = 4) +
+  geom_point(data = monthly |> 
+               filter(Detachment == "Springdale"),
+             aes(x = Date - duration(7, units = "days"), y = Max, fill = "Max"), shape = 22, size = 2) +
+   geom_errorbar(data = monthly |> 
+                  filter(Detachment == "Springdale"),
+                aes(x = Date, 
+                    ymin = Mean_Temp-TempSD,
+                    ymax = Mean_Temp+TempSD),
+                width = 4) +
+    geom_point(data = monthly |> 
+                 filter(Detachment == "Springdale"),
+               aes(x = Date, y = Mean_Temp, fill = "Mean"), shape = 22, size = 2) +
+  facet_wrap(~year, scales = "free_x") +
+  ggh4x::facetted_pos_scales(x = scales) +
+  theme_bw() +
+  scale_fill_manual(values = c("Mean" = 'black', 
+                               "Max" = 'orange', 
+                               "Min" = 'blue')) +
+    labs(y = "Water Temperature (°C)",
+       x = "Month",
+       fill = "",
+       title = "Central (West) Region - Monthly Temperature") +
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5)) +
+  ylim(0,30)
+
+p4 <- ggarrange(p4a, p4b, ncol = 1, common.legend = TRUE, legend = "bottom")
+
+p5a <- ggplot() +
+  geom_hline(yintercept = 20, linetype = 'dashed', colour = 'red') +
+  ## daily trends
+  geom_smooth(data = daily |>  
+                filter(Detachment == "Stephenville") |> 
+                filter(month == 5 | month == 6 | month == 7 | month == 8 | month == 9), 
+              aes(x = Date, y = Tmin), colour = 'blue') +
+  geom_smooth(data = daily |>                 
+                filter(Detachment == "Stephenville") |> 
+                filter(month == 5 | month == 6 | month == 7 | month == 8 | month == 9), 
+              aes(x = Date, y = Tmax), colour = 'orange') +
+  geom_smooth(data = daily |> 
+                filter(Detachment == "Stephenville") |> 
+                filter(month == 5 | month == 6 | month == 7 | month == 8 | month == 9), 
+              aes(x = Date, y = Daily_Temp), colour = 'black') +
+  facet_wrap(~year, scales = "free_x") +
+  ggh4x::facetted_pos_scales(x = scales) +
+  theme_bw() +
+  scale_fill_manual(values = c("Mean" = 'black', 
+                               "Max" = 'orange', 
+                               "Min" = 'blue')) +
+    labs(y = "Water Temperature (°C)",
+       x = "Month",
+       fill = "",
+       title = "Southwest Coast - Daily Temperature") +
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5)) +
+  ylim(0,30)
+
+p5b <- ggplot() +
+  geom_hline(yintercept = 20, linetype = 'dashed', colour = 'red') +
+  ## monthly trends
+  geom_errorbar(data = monthly |> 
+                  filter(Detachment == "Stephenville"),
+                aes(x = Date + duration(7, units = "days"), 
+                    ymin = Min-MinSD,
+                    ymax = Min+MinSD),
+                width = 4) +
+  geom_point(data = monthly |> 
+               filter(Detachment == "Stephenville"),
+             aes(x = Date+duration(7, units = "days"), y = Min, fill = "Min"), shape = 22, size = 2) +
+   geom_errorbar(data = monthly |> 
+                  filter(Detachment == "Stephenville"),
+                aes(x = Date - duration(7, units = "days"), 
+                    ymin = Max-MaxSD,
+                    ymax = Max+MaxSD),
+                width = 4) +
+  geom_point(data = monthly |> 
+               filter(Detachment == "Stephenville"),
+             aes(x = Date - duration(7, units = "days"), y = Max, fill = "Max"), shape = 22, size = 2) +
+   geom_errorbar(data = monthly |> 
+                  filter(Detachment == "Stephenville"),
+                aes(x = Date, 
+                    ymin = Mean_Temp-TempSD,
+                    ymax = Mean_Temp+TempSD),
+                width = 4) +
+    geom_point(data = monthly |> 
+                 filter(Detachment == "Stephenville"),
+               aes(x = Date, y = Mean_Temp, fill = "Mean"), shape = 22, size = 2) +
+  facet_wrap(~year, scales = "free_x") +
+  ggh4x::facetted_pos_scales(x = scales) +
+  theme_bw() +
+  scale_fill_manual(values = c("Mean" = 'black', 
+                               "Max" = 'orange', 
+                               "Min" = 'blue')) +
+    labs(y = "Water Temperature (°C)",
+       x = "Month",
+       fill = "",
+       title = "Southwest Coast - Monthly Temperature") +
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5)) +
+  ylim(0,37)
+
+p5 <- ggarrange(p5a, p5b, ncol = 1, common.legend = TRUE, legend = "bottom")
+
+p6a <- ggplot() +
+  geom_hline(yintercept = 20, linetype = 'dashed', colour = 'red') +
+  ## daily trends
+  geom_smooth(data = daily |>  
+                filter(Detachment == "Goose Bay") |> 
+                filter(month == 5 | month == 6 | month == 7 | month == 8 | month == 9), 
+              aes(x = Date, y = Tmin), colour = 'blue') +
+  geom_smooth(data = daily |>                 
+                filter(Detachment == "Goose Bay") |> 
+                filter(month == 5 | month == 6 | month == 7 | month == 8 | month == 9), 
+              aes(x = Date, y = Tmax), colour = 'orange') +
+  geom_smooth(data = daily |> 
+                filter(Detachment == "Goose Bay") |> 
+                filter(month == 5 | month == 6 | month == 7 | month == 8 | month == 9), 
+              aes(x = Date, y = Daily_Temp), colour = 'black') +
+  facet_wrap(~year, scales = "free_x") +
+  ggh4x::facetted_pos_scales(x = scales) +
+  theme_bw() +
+  scale_fill_manual(values = c("Mean" = 'black', 
+                               "Max" = 'orange', 
+                               "Min" = 'blue')) +
+    labs(y = "Water Temperature (°C)",
+       x = "Month",
+       fill = "",
+       title = "Labrador - Daily Temperature") +
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5)) +
+  ylim(0,30)
+
+p6b <- ggplot() +
+  geom_hline(yintercept = 20, linetype = 'dashed', colour = 'red') +
+   ## monthly trends
+  geom_errorbar(data = monthly |> 
+                  filter(Detachment == "Goose Bay"),
+                aes(x = Date + duration(7, units = "days"), 
+                    ymin = Min-MinSD,
+                    ymax = Min+MinSD),
+                width = 4) +
+  geom_point(data = monthly |> 
+               filter(Detachment == "Goose Bay"),
+             aes(x = Date+duration(7, units = "days"), y = Min, fill = "Min"), shape = 22, size = 2) +
+   geom_errorbar(data = monthly |> 
+                  filter(Detachment == "Goose Bay"),
+                aes(x = Date - duration(7, units = "days"), 
+                    ymin = Max-MaxSD,
+                    ymax = Max+MaxSD),
+                width = 4) +
+  geom_point(data = monthly |> 
+               filter(Detachment == "Goose Bay"),
+             aes(x = Date - duration(7, units = "days"), y = Max, fill = "Max"), shape = 22, size = 2) +
+   geom_errorbar(data = monthly |> 
+                  filter(Detachment == "Goose Bay"),
+                aes(x = Date, 
+                    ymin = Mean_Temp-TempSD,
+                    ymax = Mean_Temp+TempSD),
+                width = 4) +
+    geom_point(data = monthly |> 
+                 filter(Detachment == "Goose Bay"),
+               aes(x = Date, y = Mean_Temp, fill = "Mean"), shape = 22, size = 2) +
+  facet_wrap(~year, scales = "free_x") +
+  ggh4x::facetted_pos_scales(x = scales) +
+  theme_bw() +
+  scale_fill_manual(values = c("Mean" = 'black', 
+                               "Max" = 'orange', 
+                               "Min" = 'blue')) +
+    labs(y = "Water Temperature (°C)",
+       x = "Month",
+       fill = "",
+       title = "Labrador - Monthly Temperature") +
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5)) +
+  ylim(0,30)
+
+
+p6 <- ggarrange(p6a, p6b, ncol = 1, common.legend = TRUE, legend = "bottom")
+
+p7a <- ggplot() +
+  geom_hline(yintercept = 20, linetype = 'dashed', colour = 'red') +
+  ## daily trends
+  geom_smooth(data = daily |>  
+                filter(Detachment == "Marystown") |> 
+                filter(month == 5 | month == 6 | month == 7 | month == 8 | month == 9), 
+              aes(x = Date, y = Tmin), colour = 'blue') +
+  geom_smooth(data = daily |>                 
+                filter(Detachment == "Marystown") |> 
+                filter(month == 5 | month == 6 | month == 7 | month == 8 | month == 9), 
+              aes(x = Date, y = Tmax), colour = 'orange') +
+  geom_smooth(data = daily |> 
+                filter(Detachment == "Marystown") |> 
+                filter(month == 5 | month == 6 | month == 7 | month == 8 | month == 9), 
+              aes(x = Date, y = Daily_Temp), colour = 'black') +
+  facet_wrap(~year, scales = "free_x") +
+  ggh4x::facetted_pos_scales(x = scales) +
+  theme_bw() +
+  scale_fill_manual(values = c("Mean" = 'black', 
+                               "Max" = 'orange', 
+                               "Min" = 'blue')) +
+    labs(y = "Water Temperature (°C)",
+       x = "Month",
+       fill = "",
+       title = "South Coast - Daily Temperature") +
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5)) +
+  ylim(0,30)
+
+p7b <- ggplot() +
+  geom_hline(yintercept = 20, linetype = 'dashed', colour = 'red') +
+   ## monthly trends
+  geom_errorbar(data = monthly |> 
+                  filter(Detachment == "Marystown"),
+                aes(x = Date + duration(7, units = "days"), 
+                    ymin = Min-MinSD,
+                    ymax = Min+MinSD),
+                width = 4) +
+  geom_point(data = monthly |> 
+               filter(Detachment == "Marystown"),
+             aes(x = Date+duration(7, units = "days"), y = Min, fill = "Min"), shape = 22, size = 2) +
+   geom_errorbar(data = monthly |> 
+                  filter(Detachment == "Marystown"),
+                aes(x = Date - duration(7, units = "days"), 
+                    ymin = Max-MaxSD,
+                    ymax = Max+MaxSD),
+                width = 4) +
+  geom_point(data = monthly |> 
+               filter(Detachment == "Marystown"),
+             aes(x = Date - duration(7, units = "days"), y = Max, fill = "Max"), shape = 22, size = 2) +
+   geom_errorbar(data = monthly |> 
+                  filter(Detachment == "Marystown"),
+                aes(x = Date, 
+                    ymin = Mean_Temp-TempSD,
+                    ymax = Mean_Temp+TempSD),
+                width = 4) +
+    geom_point(data = monthly |> 
+                 filter(Detachment == "Marystown"),
+               aes(x = Date, y = Mean_Temp, fill = "Mean"), shape = 22, size = 2) +
+  facet_wrap(~year, scales = "free_x") +
+  ggh4x::facetted_pos_scales(x = scales) +
+  theme_bw() +
+  scale_fill_manual(values = c("Mean" = 'black', 
+                               "Max" = 'orange', 
+                               "Min" = 'blue')) +
+    labs(y = "Water Temperature (°C)",
+       x = "Month",
+       fill = "",
+       title = "South Coast - Monthly Temperature") +
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5)) +
+  ylim(0,30)
+
+p7 <- ggarrange(p7a, p7b, ncol = 1, common.legend = TRUE, legend = "bottom")
+```
+
+```{r monthly overview tables, echo = FALSE, warning=FALSE}
+M22 <- monthly |>
+  filter(month != 5) |>
+  filter(year == 2022) |>
+  dplyr::select(-MaxSD, -MinSD, -fMonth, -fYear, -month, -Date, -year) |> 
+  rename(Temp_2022 = Mean_Temp,
+         TempSD_2022 = TempSD,
+         Max_2022 = Max,
+         Min_2022 = Min)
+
+M23 <- monthly |>
+  filter(month != 5) |>
+  filter(year == 2023) |>
+  dplyr::select(-MaxSD, -MinSD, -fMonth, -fYear, -month, -Date, -year) |> 
+  rename(Temp_2023 = Mean_Temp,
+         TempSD_2023 = TempSD,
+         Max_2023 = Max,
+         Min_2023 = Min)
+
+
+M24 <- monthly |>
+  filter(month != 5) |>
+  filter(year == 2024) |>
+  dplyr::select(-MaxSD, -MinSD, -fMonth, -fYear, -month, -Date, -year) |> 
+  rename(Temp_2024 = Mean_Temp,
+         TempSD_2024 = TempSD,
+         Max_2024 = Max,
+         Min_2024 = Min)
+
+Mtable <- left_join(M22, M23) |> 
+  left_join(M24) |> 
+  mutate(Temp_2022 = paste(round(Temp_2022,1), "±", round(TempSD_2022,1))) |> 
+  mutate(Range_2022 = paste(round(Min_2022, 1), "-", round(Max_2022, 1))) |> 
+    mutate(Temp_2023 = paste(round(Temp_2023,1), "±", round(TempSD_2023,1))) |> 
+  mutate(Range_2023 = paste(round(Min_2023, 1), "-", round(Max_2023, 1))) |> 
+      mutate(Temp_2024 = paste(round(Temp_2024,1), "±", round(TempSD_2024,1))) |> 
+  mutate(Range_2024 = paste(round(Min_2024, 1), "-", round(Max_2024, 1))) |> 
+  dplyr::select(Detachment, Month, Temp_2022, Temp_2023, Temp_2024, Range_2022, Range_2023, Range_2024)
+
+# M22Lab <- bind_rows(LabsumMonthly, salmonidMonthly) |> 
+#                filter(Year == 2022) |> 
+#               filter(Month == 6 | Month == 7 | Month == 8 | Month == 9) |> 
+#                group_by(Year, Month) |> 
+#                summarise(Mean_Temp = mean(avgTemp, na.rm = TRUE),
+#                          TempSD = mean(avgTemp, na.rm = TRUE),
+#                          Min = mean(minTemp, na.rm = TRUE),
+#                          Max = mean(maxTemp, na.rm = TRUE)) |> 
+#     filter(Month != 5) |>
+#   mutate(Month2 = NA,
+#          Month2 = replace(Month2, Month ==6, "Jun"),
+#          Month2 = replace(Month2, Month ==7, "Jul"),
+#          Month2 = replace(Month2, Month ==8, "Aug"),
+#          Month2 = replace(Month2, Month ==9, "Sep")) |>
+#   ungroup() |> 
+#   dplyr::select(-Month, -Year) |> 
+#   rename(Month = Month2) |> 
+#   rename(Temp_2022 = Mean_Temp,
+#          TempSD_2022 = TempSD,
+#          Max_2022 = Max,
+#          Min_2022 = Min)
+# 
+
+# 
+# M23Lab <- bind_rows(LabsumMonthly, salmonidMonthly) |> 
+#                filter(Year == 2023) |> 
+#               filter(Month == 6 | Month == 7 | Month == 8 | Month == 9) |> 
+#                group_by(Year, Month) |> 
+#                summarise(Mean_Temp = mean(avgTemp, na.rm = TRUE),
+#                          TempSD = mean(avgTemp, na.rm = TRUE),
+#                          Min = mean(minTemp, na.rm = TRUE),
+#                          Max = mean(maxTemp, na.rm = TRUE)) |> 
+#     filter(Month != 5) |>
+#   mutate(Month2 = NA,
+#          Month2 = replace(Month2, Month ==6, "Jun"),
+#          Month2 = replace(Month2, Month ==7, "Jul"),
+#          Month2 = replace(Month2, Month ==8, "Aug"),
+#          Month2 = replace(Month2, Month ==9, "Sep")) |>
+#   ungroup() |> 
+#   dplyr::select(-Month, -Year) |> 
+#   rename(Month = Month2) |> 
+#   rename(Temp_2023 = Mean_Temp,
+#          TempSD_2023 = TempSD,
+#          Max_2023 = Max,
+#          Min_2023 = Min)
+
+
+# MtableLab <- left_join(M22Lab, M23Lab) |> 
+#   mutate(Temp_2022 = paste(round(Temp_2022,1), "±", round(TempSD_2022,1))) |> 
+#   mutate(Range_2022 = paste(round(Min_2022, 1), "-", round(Max_2022, 1))) |> 
+#     mutate(Temp_2023 = paste(round(Temp_2023,1), "±", round(TempSD_2023,1))) |> 
+#   mutate(Range_2023 = paste(round(Min_2023, 1), "-", round(Max_2023, 1))) |> 
+#   dplyr::select(Month, Temp_2022, Temp_2023, Range_2022, Range_2023)
+
+BR <- kable(Mtable |> 
+        filter(Detachment == "Bay Roberts") |> 
+        dplyr::select(-Detachment),
+      col.names = c("Month", "2022", "2023", "2024", "2022", "2023", "2024"),
+      align = 'c',
+      linesep = "",
+      booktabs = TRUE) |> 
+  kable_classic("striped", full_width = T, font_size =28) |> 
+  add_header_above(c(" " = 1,
+                     "Mean Temperature (±sd) (°C)" = 3,
+                     "Mean Range (°C)" = 3))
+
+Cl <- kable(Mtable |> 
+        filter(Detachment == "Clarenville") |> 
+        dplyr::select(-Detachment),
+      col.names = c("Month", "2022", "2023", "2024", "2022", "2023", "2024"),
+      align = 'c',
+      linesep = "",
+      booktabs = TRUE) |> 
+  kable_classic("striped", full_width = T, font_size =28) |> 
+  add_header_above(c(" " = 1,
+                     "Mean Temperature (±sd) (°C)" = 3,
+                     "Mean Range (°C)" = 3))
+
+Sp <- kable(Mtable |> 
+        filter(Detachment == "Springdale") |> 
+        dplyr::select(-Detachment),
+      col.names = c("Month", "2022", "2023", "2024", "2022", "2023", "2024"),
+      align = 'c',
+      linesep = "",
+      booktabs = TRUE) |> 
+  kable_classic("striped", full_width = T, font_size =28) |> 
+  add_header_above(c(" " = 1,
+                     "Mean Temperature (±sd) (°C)" = 3,
+                     "Mean Range (°C)" = 3))
+
+St <- kable(Mtable |> 
+        filter(Detachment == "Stephenville") |> 
+        dplyr::select(-Detachment),
+      col.names = c("Month", "2022", "2023", "2024", "2022", "2023", "2024"),
+      align = 'c',
+      linesep = "",
+      booktabs = TRUE) |> 
+  kable_classic("striped", full_width = T, font_size =28) |> 
+  add_header_above(c(" " = 1,
+                     "Mean Temperature (±sd) (°C)" = 3,
+                     "Mean Range (°C)" = 3))
+
+Tw <- kable(Mtable |> 
+        filter(Detachment == "Twillingate") |> 
+        dplyr::select(-Detachment),
+      col.names = c("Month", "2022", "2023", "2024", "2022", "2023", "2024"),
+      align = 'c',
+      linesep = "",
+      booktabs = TRUE) |> 
+  kable_classic("striped", full_width = T, font_size =28) |> 
+  add_header_above(c(" " = 1,
+                     "Mean Temperature (±sd) (°C)" = 3,
+                     "Mean Range (°C)" = 3))
+
+Lab <- kable(Mtable |> 
+        filter(Detachment == "Goose Bay") |> 
+        dplyr::select(-Detachment),
+      col.names = c("Month", "2022", "2023", "2024", "2022", "2023", "2024"),
+      align = 'c',
+      linesep = "",
+      booktabs = TRUE) |> 
+  kable_classic("striped", full_width = T, font_size =28) |> 
+  add_header_above(c(" " = 1,
+                     "Mean Temperature (±sd) (°C)" = 3,
+                     "Mean Range (°C)" = 3))
+
+Ma <- kable(Mtable |> 
+        filter(Detachment == "Marystown") |> 
+        dplyr::select(-Detachment),
+      col.names = c("Month", "2022", "2023", "2024", "2022", "2023", "2024"),
+      align = 'c',
+      linesep = "",
+      booktabs = TRUE) |> 
+  kable_classic("striped", full_width = T, font_size =28) |> 
+  add_header_above(c(" " = 1,
+                     "Mean Temperature (±sd) (°C)" = 3,
+                     "Mean Range (°C)" = 3))
+
+```
+
+
+```{r plot temp tables}
+BR
+Cl
+Lab
+Sp
+St
+Tw
+Ma
+
+```
+
+
+
+```{r save temp tables, eval = FALSE, echo = FALSE}
+save_kable(BR, file = "./output/tables/Table_BayRoberts.png")
+save_kable(Cl, file = "./output/tables/Table_Clarenville.png")
+save_kable(Lab, file = "./output/tables/Table_GooseBay.png")
+save_kable(Sp, file = "./output/tables/Table_Springdale.png")
+save_kable(St, file = "./output/tables/Table_Stephenville.png")
+save_kable(Tw, file = "./output/tables/Table_Twilingate.png")
+save_kable(Ma, file = "./output/tables/Table_Marystown.png")
+
+```
+
+```{r plot temp figures, echo = FALSE, messsage = FALSE, warning = FALSE}
+p1
+p2
+p3
+p4
+p5
+p6
+
+```
+
+
+```{r save figs, eval = FALSE, echo = FALSE}
+ggsave(p1, file = "./output/R1.png", device = "png", height = 6, width = 6)
+ggsave(p2, file = "./output/R2.png", device = "png", height = 6, width = 6)
+ggsave(p3, file = "./output/R3.png", device = "png", height = 6, width = 6)
+ggsave(p4, file = "./output/R4.png", device = "png", height = 6, width = 6)
+ggsave(p5, file = "./output/R5.png", device = "png", height = 6, width = 6)
+ggsave(p6, file = "./output/R6.png", device = "png", height = 6, width = 6)
+ggsave(p7, file = "./output/R7.png", device = "png", height = 6, width = 6)
+
+```
+
+# Water Level 
+
+```{r water level figs, echo = FALSE, message = FALSE}
+
+
+outofwater <- waterfull |>
+   left_join(detach) |>
+    mutate(Detachment = replace(Detachment, is.na(Detachment) & River.Name == "St. Shotts River", "Bay Roberts")) |>
+  filter(out.of.water !=0) |>
+  distinct(Station)
+
+# waterfull |> 
+#    left_join(detach) |> 
+#     mutate(Detachment = replace(Detachment, is.na(Detachment) & River.Name == "St. Shotts River", "Bay Roberts")) |> 
+#   mutate(Month = month(Time.UTC)) |> 
+#   filter(Station %in% outofwater$Station) |> 
+#   group_by(River.Name, Station, Serial, Year, Month) |> 
+#   mutate(Total = n()) |> 
+#   ungroup() |> 
+#   filter(out.of.water == 1) |> 
+#   group_by(River.Name, Station, Serial, Year, Total,Month) |> 
+#   summarise(hours = n()) |> 
+#   mutate(Percent = (hours/Total) * 100) |> 
+#   group_by(Year) |> 
+#   summarise(mean(Percent),
+#             sd(Percent),
+#             min(Percent),
+#             max(Percent)) ## Highlands out of water the most
+
+
+Level <- waterfull |> 
+   left_join(detach) |> 
+    mutate(Detachment = replace(Detachment, is.na(Detachment) & River.Name == "St. Shotts River", "Bay Roberts")) |> 
+  filter(Recording == "Hobo Weather Station" | Recording == "Level") |> 
+  filter(!is.na(Level.m)) |> 
+  filter(Level.m < 90) |> 
+  filter(Station != "Amy's Lake") |> 
+  filter(Level.m > 0)
+
+
+LevelDaily <- Level |> 
+  group_by(Station, Year, Date.UTC, Detachment) |> 
+  summarise(level = mean(Level.m, na.rm = TRUE)) |> 
+  ungroup() 
+
+LevelMonthly <- Level |> 
+  mutate(Month = month(Time.UTC)) |> 
+  group_by(Station, Year, Month, Detachment) |> 
+  summarise(level = mean(Level.m, na.rm = TRUE),
+            Min = min(Level.m, na.rm = TRUE),
+            Max = max(Level.m, na.rm = TRUE),
+            levelSD = sd(Level.m, na.rm = TRUE)) |> 
+  ungroup()
+
+
+
+## Average across years
+Dailyaverage <- LevelDaily |> 
+  group_by(Year, Date.UTC, Detachment) |> 
+  summarise(level.mean = mean(level, na.rm = TRUE), level.sd = sd(level, na.rm = TRUE)) |> 
+  ungroup() |> 
+  mutate(Month = month(Date.UTC),
+         Day = day(Date.UTC)) |> 
+  filter(Month >=5 & Month <= 10) |> 
+  mutate(Date = ymd(paste(2023, Month, Day, sep = "-")))
+
+Monthlyaverage <- LevelMonthly |> 
+  group_by(Year, Month, Detachment) |> 
+  summarise(level.mean = mean(level, na.rm = TRUE), 
+            level.sd = sd(level, na.rm = TRUE),
+            level.max = mean(Max, na.rm = TRUE),
+            level.min = mean(Min, na.rm = TRUE)) |> 
+  ungroup() |> 
+  mutate(Day = 15) |> 
+  filter(Month >=5 & Month <= 10) |> 
+  mutate(Date = ymd(paste(2023, Month, Day, sep = "-")))
+
+l1 <- ggplot() +
+  geom_smooth(data = Dailyaverage |> 
+                filter(Detachment == "Bay Roberts"),
+              aes(y = level.mean, x = Date)) +
+  geom_point(data = Monthlyaverage |> 
+               filter(Detachment == "Bay Roberts"),
+             aes(x = Date, y = level.mean), size = 2, shape = 15) +
+  geom_errorbar(data = Monthlyaverage |> 
+                  filter(Detachment == "Bay Roberts"), 
+                aes(x = Date, ymin = level.mean - level.sd, ymax = level.mean + level.sd),
+                width = 10) +
+  facet_wrap(~Year) +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b") +
+  theme_bw() +
+  labs(x = "Time",
+       y = "Water Level (m)",
+       title = "Avalon Region") +
+  ylim(-0.25,1.25) +
+  theme(plot.title = element_text(hjust=0.5))
+
+l2 <- ggplot() +
+  geom_smooth(data = Dailyaverage |> 
+                filter(Detachment == "Clarenville"),
+              aes(y = level.mean, x = Date)) +
+    geom_point(data = Monthlyaverage |> 
+               filter(Detachment == "Clarenville"),
+             aes(x = Date, y = level.mean), size = 2, shape = 15) +
+  geom_errorbar(data = Monthlyaverage |> 
+                  filter(Detachment == "Clarenville"), 
+                aes(x = Date, ymin = level.mean - level.sd, ymax = level.mean + level.sd),
+                width = 10) +
+  facet_wrap(~Year) +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b") +
+  theme_bw() +
+  labs(x = "Time",
+       y = "Water Level (m)",
+       title = "Northeast Region") +
+  ylim(-0.25, 1.25) +
+  theme(plot.title = element_text(hjust=0.5))
+
+l3 <- ggplot() +
+  geom_smooth(data = Dailyaverage |> 
+                filter(Detachment == "Twillingate"),
+              aes(y = level.mean, x = Date)) +
+   geom_point(data = Monthlyaverage |> 
+               filter(Detachment == "Twillingate"),
+             aes(x = Date, y = level.mean), size = 2, shape = 15) +
+  geom_errorbar(data = Monthlyaverage |> 
+                  filter(Detachment == "Twillingate"), 
+                aes(x = Date, ymin = level.mean - level.sd, ymax = level.mean + level.sd),
+                width = 10) +
+  facet_wrap(~Year) +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b") +
+  theme_bw() +
+  labs(x = "Time",
+       y = "Water Level (m)",
+       title = "Central (East) Region") +
+  ylim(-0.25, 1.25) +
+  theme(plot.title = element_text(hjust=0.5))
+
+l4 <- ggplot() +
+  geom_smooth(data = Dailyaverage |> 
+                filter(Detachment == "Springdale"),
+              aes(y = level.mean, x = Date)) +
+    geom_point(data = Monthlyaverage |> 
+               filter(Detachment == "Springdale"),
+             aes(x = Date, y = level.mean), size = 2, shape = 15) +
+  geom_errorbar(data = Monthlyaverage |> 
+                  filter(Detachment == "Springdale"), 
+                aes(x = Date, ymin = level.mean - level.sd, ymax = level.mean + level.sd),
+                width = 10) +
+  facet_wrap(~Year) +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b") +
+  theme_bw() +
+  labs(x = "Time",
+       y = "Water Level (m)",
+       title = "Central (West) Region") +
+  ylim(-0.25,1.25) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+l5 <- ggplot() +
+  geom_smooth(data = Dailyaverage |> 
+                filter(Detachment == "Stephenville"),
+              aes(y = level.mean, x = Date)) +
+      geom_point(data = Monthlyaverage |> 
+               filter(Detachment == "Stephenville"),
+             aes(x = Date, y = level.mean), size = 2, shape = 15) +
+  geom_errorbar(data = Monthlyaverage |> 
+                  filter(Detachment == "Stephenville"), 
+                aes(x = Date, ymin = level.mean - level.sd, ymax = level.mean + level.sd),
+                width = 10) +
+  facet_wrap(~Year) +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b") +
+  theme_bw() +
+  labs(x = "Time",
+       y = "Water Level (m)",
+       title = "Southwest Coast") +
+  ylim(-0.25,1.25) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+l6 <- ggplot() +
+  # part 1
+  geom_smooth(data = Dailyaverage |> 
+                filter(Detachment == "Goose Bay"),
+              aes(y = level.mean, x = Date)) +
+  
+      geom_point(data = Monthlyaverage |> 
+               filter(Detachment == "Goose Bay"),
+             aes(x = Date, y = level.mean), size = 2, shape = 15) +
+  geom_errorbar(data = Monthlyaverage |> 
+                  filter(Detachment == "Goose Bay"), 
+                aes(x = Date, ymin = level.mean - level.sd, ymax = level.mean + level.sd),
+                width = 10) +
+  facet_wrap(~Year) +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b") +
+  theme_bw() +
+  labs(x = "Time",
+       y = "Water Level (m)",
+       title = "Labrador") +
+  ylim(-0.25,1.5) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+l7 <- ggplot() +
+  geom_smooth(data = Dailyaverage |> 
+                filter(Detachment == "Marystown"),
+              aes(y = level.mean, x = Date)) +
+      geom_point(data = Monthlyaverage |> 
+               filter(Detachment == "Marystown"),
+             aes(x = Date, y = level.mean), size = 2, shape = 15) +
+  geom_errorbar(data = Monthlyaverage |> 
+                  filter(Detachment == "Marystown"), 
+                aes(x = Date, ymin = level.mean - level.sd, ymax = level.mean + level.sd),
+                width = 10) +
+  facet_wrap(~Year) +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b") +
+  theme_bw() +
+  labs(x = "Time",
+       y = "Water Level (m)",
+       title = "South Coast") +
+  ylim(-0.25,1.5) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+```{r save level figs, eval = FALSE, echo = FALSE}
+ggsave(l1, file = "./output/L1.png", device = "png", height = 3, width = 5)
+ggsave(l2, file = "./output/L2.png", device = "png", height = 3, width =5)
+ggsave(l3, file = "./output/L3.png", device = "png", height = 3, width = 5)
+ggsave(l4, file = "./output/L4.png", device = "png", height = 3, width = 5)
+ggsave(l5, file = "./output/L5.png", device = "png", height = 3, width = 5)
+ggsave(l6, file = "./output/L6.png", device = "png", height = 3, width = 5)
+ggsave(l7, file = "./output/L7.png", device = "png", height = 3, width = 5)
+
+```
+
+```{r plot level figs, echo = FALSE, warning = FALSE, message= FALSE}
+l1
+l2
+l3
+l4
+l5
+l6
+
+
+```
+
+
+
+```{r water level analyis, echo = FALSE}
+library(mgcv)
+library(DHARMa)
+library(car)
+
+Monthlyaverage$fYear <- factor(Monthlyaverage$Year)
+Monthlyaverage$fMonth <- factor(Monthlyaverage$Month)
+
+
+level.m1 <- lm(level.mean ~ Detachment + fYear + Month,
+                data = Monthlyaverage)
+# summary(level.m1)
+# anova(level.m1)
+
+
+
+```
+
+
+
+```{r monthly level overview tables, echo = FALSE, warning=FALSE}
+M22 <- Monthlyaverage |>
+  filter(Month == 6 | Month == 7 | Month == 8 | Month == 9) |>
+  mutate(Month = replace(Month, Month == 6, "Jun"),
+         Month = replace(Month, Month == 7, "Jul"),
+         Month = replace(Month, Month == 8, "Aug"),
+         Month = replace(Month, Month == 9, "Sep")) |> 
+  filter(Year == 2022) |>
+  dplyr::select(Month, Detachment, level.mean, level.max, level.min) |> 
+  mutate(level.mean = round(level.mean, 2)) |> 
+  rename(Level_2022 = level.mean,
+         Max_2022 = level.max,
+         Min_2022 = level.min) 
+
+M23 <- Monthlyaverage |>
+  filter(Month == 6 | Month == 7 | Month == 8 | Month == 9) |>
+  mutate(Month = replace(Month, Month == 6, "Jun"),
+         Month = replace(Month, Month == 7, "Jul"),
+         Month = replace(Month, Month == 8, "Aug"),
+         Month = replace(Month, Month == 9, "Sep")) |> 
+  filter(Year == 2023) |>
+    dplyr::select(Month, Detachment, level.mean, level.max, level.min) |> 
+    mutate(level.mean = round(level.mean, 2)) |> 
+  rename(Level_2023 = level.mean,
+         Max_2023 = level.max,
+         Min_2023 = level.min)
+
+
+M24 <- Monthlyaverage |>
+  filter(Month == 6 | Month == 7 | Month == 8 | Month == 9) |>
+  mutate(Month = replace(Month, Month == 6, "Jun"),
+         Month = replace(Month, Month == 7, "Jul"),
+         Month = replace(Month, Month == 8, "Aug"),
+         Month = replace(Month, Month == 9, "Sep")) |> 
+  filter(Year == 2024) |>
+    dplyr::select(Month, Detachment, level.mean, level.max, level.min) |> 
+    mutate(level.mean = round(level.mean, 2)) |> 
+  rename(Level_2024 = level.mean,
+         Max_2024 = level.max,
+         Min_2024 = level.min)
+
+Ltable <- left_join(M22, M23) |>
+  left_join(M24) |> 
+  mutate(Range_2022 = paste(round(Min_2022, 1), "-", round(Max_2022, 1))) |> 
+  mutate(Range_2023 = paste(round(Min_2023, 1), "-", round(Max_2023, 1))) |> 
+    mutate(Range_2024 = paste(round(Min_2024, 1), "-", round(Max_2024, 1))) |> 
+  dplyr::select(Detachment, Month, Level_2022, Level_2023, Level_2024, Range_2022, Range_2023, Range_2024)
+
+Marystown <- left_join(M23, M24) |> 
+    filter(Detachment == "Marystown") |> 
+  mutate(Range_2023 = paste(round(Min_2023, 1), "-", round(Max_2023, 1))) |> 
+    mutate(Range_2024 = paste(round(Min_2024, 1), "-", round(Max_2024, 1))) |> 
+  dplyr::select(Detachment, Month, Level_2023, Level_2024, Range_2023, Range_2024)
+
+BR <- kable(Ltable |> 
+        filter(Detachment == "Bay Roberts") |> 
+        dplyr::select(-Detachment),
+      col.names = c("Month", "2022", "2023", "2024", "2022", "2023", "2024"),
+      align = 'c',
+      linesep = "",
+      booktabs = TRUE) |> 
+  kable_classic("striped", full_width = T, font_size =28) |> 
+  add_header_above(c(" " = 1,
+                     "Mean water level (m)" = 3,
+                     "Mean Range (m)" = 3))
+
+Cl <- kable(Ltable |> 
+        filter(Detachment == "Clarenville") |> 
+        dplyr::select(-Detachment),
+      col.names = c("Month", "2022", "2023", "2024", "2022", "2023", "2024"),
+      align = 'c',
+      linesep = "",
+      booktabs = TRUE) |> 
+  kable_classic("striped", full_width = T, font_size =28) |> 
+  add_header_above(c(" " = 1,
+                     "Mean water level (m)" = 3,
+                     "Mean Range (m)" = 3))
+
+GB <- kable(Ltable |> 
+        filter(Detachment == "Goose Bay") |> 
+        dplyr::select(-Detachment),
+      col.names = c("Month", "2022", "2023", "2024", "2022", "2023", "2024"),
+      align = 'c',
+      linesep = "",
+      booktabs = TRUE) |> 
+  kable_classic("striped", full_width = T, font_size =28) |> 
+  add_header_above(c(" " = 1,
+                     "Mean water level (m)" = 3,
+                     "Mean Range (m)" = 3))
+
+Sp <- kable(Ltable |> 
+        filter(Detachment == "Springdale") |> 
+        dplyr::select(-Detachment),
+      col.names = c("Month", "2022", "2023", "2024", "2022", "2023", "2024"),
+      align = 'c',
+      linesep = "",
+      booktabs = TRUE) |> 
+  kable_classic("striped", full_width = T, font_size =28) |> 
+  add_header_above(c(" " = 1,
+                     "Mean water level (m)" = 3,
+                     "Mean Range (m)" = 3))
+St <- kable(Ltable |> 
+        filter(Detachment == "Stephenville") |> 
+        dplyr::select(-Detachment),
+      col.names = c("Month", "2022", "2023", "2024", "2022", "2023", "2024"),
+      align = 'c',
+      linesep = "",
+      booktabs = TRUE) |> 
+  kable_classic("striped", full_width = T, font_size =28) |> 
+  add_header_above(c(" " = 1,
+                     "Mean water level (m)" = 3,
+                     "Mean Range (m)" = 3))
+Tw <- kable(Ltable |> 
+        filter(Detachment == "Twillingate") |> 
+        dplyr::select(-Detachment),
+      col.names = c("Month", "2022", "2023", "2024", "2022", "2023", "2024"),
+      align = 'c',
+      linesep = "",
+      booktabs = TRUE) |> 
+  kable_classic("striped", full_width = T, font_size =28) |> 
+  add_header_above(c(" " = 1,
+                     "Mean water level (m)" = 3,
+                     "Mean Range (m)" = 3))
+
+Ma <- kable(Marystown |> 
+        dplyr::select(-Detachment),
+      col.names = c("Month", "2023", "2024", "2023", "2024"),
+      align = 'c',
+      linesep = "",
+      booktabs = TRUE) |> 
+  kable_classic("striped", full_width = T, font_size =28) |> 
+  add_header_above(c(" " = 1,
+                     "Mean water level (m)" = 2,
+                     "Mean Range (m)" = 2))
+
+
+```
+```{r level tables}
+BR
+Cl
+GB
+Sp
+St
+Tw
+Ma
+
+```
+```{r save level tables, eval = FALSE, echo = FALSE}
+save_kable(BR, file = "./output/tables/Level_BayRoberts.png")
+save_kable(Cl, file = "./output/tables/Level_Clarenville.png")
+save_kable(GB, file = "./output/tables/Level_GooseBay.png")
+save_kable(Sp, file = "./output/tables/Level_Springdale.png")
+save_kable(St, file = "./output/tables/Level_Stephenville.png")
+save_kable(Tw, file = "./output/tables/Level_Twilingate.png")
+save_kable(Tw, file = "./output/tables/Level_Marystown.png")
+
+```
+
+### Percent time above 20
+
+```{r summary percent above figures, echo = FALSE, message = FALSE, warning = FALSE}
+# ggplot(above20 |> 
+#          filter(month!=5)) +
+#   geom_bar(aes( x = MonthName, y = Percent), fill = "orange", colour = 'black', stat = "identity") +
+#   coord_flip() +
+#   facet_grid(Year~Detachment) +
+#   theme_bw() +
+#   labs(y = "Percent of hours",
+#        x = "Month",
+#        fill = "",
+#        title = "Percent of total monthly hours above 20 °C") +
+#   theme(legend.position = "bottom",
+#         plot.title = element_text(hjust = 0.5),
+#         strip.text.y = element_text(size = 12),
+#         strip.text.x = element_text(size = 11),
+#         axis.title = element_text(size = 12),
+#         axis.text.x = element_text(size = 11, angle = 90, vjust = 0)) +
+#   ylim(0,100)
+# 
+# # ggsave(file = "./output/percent_hours_20.png", device = "png", units = "in", height = 5, width = 12.5)
+# ggplot(above25 |> 
+#          filter(month!=5)) +
+#   geom_bar(aes( x = MonthName, y = Percent), fill = "darkred", colour = 'black', stat = "identity") +
+#   coord_flip() +
+#   facet_grid(Year~Detachment) +
+#   theme_bw() +
+#   labs(y = "Percent of hours",
+#        x = "Month",
+#        fill = "",
+#        title = "Percent of total monthly hours above 25 °C") +
+#   theme(legend.position = "bottom",
+#         plot.title = element_text(hjust = 0.5),
+#         strip.text.y = element_text(size = 12),
+#         strip.text.x = element_text(size = 11),
+#         axis.title = element_text(size = 12),
+#         axis.text.x = element_text(size = 11, angle = 90, vjust = 0)) +
+#   ylim(0,100)
+
+above <- above20 |> 
+  mutate(level = ">20 °C") |> 
+  bind_rows(above25 |> 
+              mutate(level = ">25 °C")) |> 
+  mutate(level = factor(level, levels = c(">25 °C", ">20 °C")))
+
+
+ggplot() +
+  geom_bar(data = above |> filter(month != 5),
+           aes(x = MonthName, y = Percent, fill = level), position = position_dodge2(preserve = "single"), colour = 'black', stat = "identity") +
+  # geom_bar(data = above25 |> filter(month != 5),
+  #          aes(x = MonthName, y = Percent), fill = 'darkred', colour = 'black', stat = 'identity') +
+  coord_flip() +
+  scale_fill_manual(values = c('darkred', 'orange')) +
+  facet_grid(Year~Detachment) +
+  theme_bw() +
+  labs(x = "% above",
+       y = "Month",
+       fill = "") +
+    theme(legend.position = "bottom")
+
+regions <- data.frame(Detachment = c("Bay Roberts", "Clarenville", "Goose Bay", "Marystown", "Springdale", "Stephenville", "Twillingate"),
+                      Region = c("Avalon", "Northeast", "Labrador", "Southern Shore", "Central-West", "West", "Central-East"))
+
+
+A20<- above20 |> 
+  left_join(regions) |> 
+  filter(month !=5) |> 
+  filter(month != 9) |> 
+  filter(!is.na(Region)) |> 
+  # filter(Region!= "Southern Shore") |> 
+  ggplot() +
+  geom_bar(aes(x = MonthName, y = Percent, fill = as.factor(Year)),
+           position = position_dodge2(preserve = "single"), colour = 'black', stat= "identity") +
+  facet_wrap(~Region) +
+  scale_fill_manual(values = c("grey", "darkred", "orange")) +
+  theme_bw() +
+  labs(x = "Month",
+       y = "Percent time > 20 °C",
+       fill = "Year",
+       title = "Percent time > 20 °C") +
+  ylim(0,100)+
+  theme(legend.position = "bottom") +
+  theme(plot.title = element_text(size = 18, hjust =0.5))
+
+A25 <- above25 |> 
+  left_join(regions) |> 
+  filter(month !=5) |> 
+  filter(month != 9) |> 
+  filter(!is.na(Region)) |> 
+  ggplot() +
+  geom_bar(aes(x = MonthName, y = Percent, fill = as.factor(Year)),
+           position = position_dodge2(preserve = "single"), colour = 'black', stat= "identity") +
+  facet_wrap(~Region) +
+  scale_fill_manual(values = c("grey", "darkred","orange")) +
+  theme_bw() +
+  labs(x = "Month",
+       y = "Percent time > 25 °C",
+       fill = "Year",
+       title = "Percent time > 25 °C") +
+  ylim(0,100) +
+  theme(legend.position = "bottom") +
+  theme(plot.title = element_text(size = 18, hjust =0.5))
+
+A20
+A25
+
+ggsave(A20, file = "./output/percent_hours_20.png", device = "png", units = "in", height = 5.5, width = 6)
+
+
+ggsave(A25, file = "./output/percent_hours_25.png", device = "png", units = "in", height = 5.5, width = 6)
+```
+
+
+
+
+```{r hobo comparisons, echo = FALSE, message = FALSE, eval = FALSE}
+
+date.lim <- c(min(water$Time[water$River.Number == 46 & water$Recording == "Hobo Weather Station" & water$Year == 2023], na.rm = TRUE), max(water$Time[water$River.Number == 46 & water$Recording == "Water"], na.rm = TRUE))
+
+
+## Water
+p1 <- water |>
+  filter(River.Number == 46) |>
+  filter(Recording == "Water") |>
+  filter(out.of.water == 0) |>
+  filter(Station == "Exploits BFway Intake" | Station == "Grand Falls power canal") |>
+  filter(Time >= date.lim[1] & Time <= date.lim[2]) |>
+  complete(Station, Time = seq.POSIXt(min(Time), max(Time), by = "1 hour")) |>
+  ggplot() +
+  geom_line(aes( x = Time, y = Temp.C)) +
+  facet_wrap(~Station, ncol = 1) +
+  labs(x = "Time",
+       y = "Temperature (°C)") +
+  theme_bw() +
+  scale_x_datetime(date_labels = "%b-%Y", limits = date.lim) +
+  ylim(c(0,31))
+
+
+## Station
+p2 <- water |>
+  filter(River.Number == 46) |>
+  filter(Station == "Exploits Bishops Fishway" & Recording == "Hobo Weather Station") |>
+    filter(Time >= date.lim[1] & Time <= date.lim[2]) |>
+filter(out.of.water == 0) |>
+  ggplot() +
+  geom_line(aes( x = Time, y = Temp.C)) +
+  facet_wrap(~Station, scales = "free_x", ncol = 2) +
+  labs(x = "Time",
+       y = "Temperature (°C)") +
+  theme_bw() +
+  scale_x_datetime(date_labels = "%b-%Y", limits = date.lim) +
+  ylim(c(0,31))
+
+
+P1A <- ggarrange(p1, p2, ncol = 1,
+          labels = c("a", "b"),
+          heights = c(0.65,0.35),
+          common.legend = TRUE,
+          legend = "bottom")
+
+P1B <- water |>
+  filter(River.Number == 46) |>
+  filter(Recording == "Water" | Recording == "Hobo Weather Station") |>
+  filter(out.of.water == 0) |>
+  filter(Station == "Exploits BFway Intake" | Station == "Grand Falls power canal" | Station == "Exploits Bishops Fishway") |>
+  filter(Time >= date.lim[1] & Time <= date.lim[2]) |>
+  complete(Station, Time = seq.POSIXt(min(Time), max(Time), by = "1 hour")) |>
+  ggplot() +
+  geom_line(aes( x = Time, y = Temp.C)) +
+  labs(x = "Time",
+       y = "Temperature (°C)") +
+  theme_bw() +
+  scale_x_datetime(date_labels = "%b-%Y", limits = date.lim) +
+  ylim(c(0,31))
+
+
+date.lim <- c(min(water$Time[water$River.Number == 50 & water$Recording == "Hobo Weather Station"]), max(water$Time[water$River.Number == 50 & water$Recording == "Hobo Weather Station"]))
+
+## Water
+p1 <- water |>
+  filter(River.Number == 50) |>
+  filter(Recording == "Water") |>
+  filter(Time >= date.lim[1] & Time <= date.lim[2]) |>
+  filter(out.of.water == 0) |>
+    # complete(Serial, Time = seq.POSIXt(min(Time), max(Time), by = "1 hour")) |>
+  ggplot() +
+  # geom_line(aes( x = Time,
+  #           y = Temp.C)) +
+  geom_line(aes(x = Time, y = Level.m*20, colour = "Water Level")) +
+  geom_line(aes( x = Time, y = Temp.C, colour = "Water Temperature")) +
+  facet_wrap(~Station, ncol = 1) +
+  labs(x = "Time",
+       y = "Temperature (°C)") +
+  theme_bw() +
+  scale_x_datetime(date_labels = "%b-%Y", limits = date.lim) +
+  scale_y_continuous(sec.axis = sec_axis(name = "Water Level (m)",
+                                         trans = ~.x/20),
+                     limits = c(0,31)) +
+  scale_colour_manual( name = "Recording",
+                       breaks = c( 'Water Temperature', 'Water Level' ),
+                       values = c( 'Water Temperature' = 'black',
+                                   'Water Level' = 'blue' ) ) +
+  theme(legend.position = "bottom")
+
+
+## Station
+p2 <- water |>
+  filter(River.Number == 50) |>
+  filter(Recording == "Hobo Weather Station") |>
+  filter(out.of.water == 0) |>
+  # complete(Serial, Time = seq.POSIXt(min(Time), max(Time), by = "1 hour")) |>
+  ggplot() +
+  # geom_line(aes( x = Time,
+  #           y = Temp.C)) +
+  geom_line(aes(x = Time, y = Level.m*20, colour = "Water Level")) +
+  geom_line(aes( x = Time, y = Temp.C, colour = "Water Temperature")) +
+  facet_wrap(~Station, scales = "free_x", ncol = 2) +
+  labs(x = "Time",
+       y = "Temperature (°C)") +
+  theme_bw() +
+  scale_x_datetime(date_labels = "%b-%Y", limits = date.lim) +
+  scale_y_continuous(sec.axis = sec_axis(name = "Water Level (m)",
+                                         trans = ~.x/20),
+                     limits = c(0,31)) +
+  scale_colour_manual( name = "Recording",
+                       breaks = c( 'Water Temperature', 'Water Level' ),
+                       values = c( 'Water Temperature' = 'black',
+                                   'Water Level' = 'blue' ) ) +
+  theme(legend.position = "bottom")
+
+P2A <- ggarrange(p1,
+          p2,
+          ncol = 1,
+          common.legend = TRUE,
+          legend = "bottom",
+          labels = c("a", "b"),
+          heights = c(0.62,0.38))
+
+
+P2B <- water |>
+  filter(River.Number == 50) |>
+  filter(Recording == "Water" | Recording == "Hobo Weather Station") |>
+  filter(Time >= date.lim[1] & Time <= date.lim[2]) |>
+  filter(out.of.water == 0) |>
+    # complete(Serial, Time = seq.POSIXt(min(Time), max(Time), by = "1 hour")) |>
+  ggplot() +
+  # geom_line(aes( x = Time,
+  #           y = Temp.C)) +
+  geom_line(aes(x = Time, y = Level.m*20, colour = "Water Level")) +
+  geom_line(aes( x = Time, y = Temp.C, colour = "Water Temperature")) +
+  labs(x = "Time",
+       y = "Temperature (°C)") +
+  theme_bw() +
+  scale_x_datetime(date_labels = "%b-%Y", limits = date.lim) +
+  scale_y_continuous(sec.axis = sec_axis(name = "Water Level (m)",
+                                         trans = ~.x/20),
+                     limits = c(0,31)) +
+  scale_colour_manual( name = "Recording",
+                       breaks = c( 'Water Temperature', 'Water Level' ),
+                       values = c( 'Water Temperature' = 'black',
+                                   'Water Level' = 'blue' ) ) +
+  theme(legend.position = "bottom")
+
+date.lim <- c(min(water$Time[water$River.Number == 81 & water$Recording == "Hobo Weather Station" & water$Year == 2023]), max(water$Time[water$River.Number == 81 & water$Recording == "Hobo Weather Station" & water$Year==2023]))
+
+## Water
+p1 <- water |>
+  filter(River.Number == 81) |>
+  filter(Recording == "Water") |>
+  filter(!is.na(Temp.C)) |>
+  filter(Time >= date.lim[1] & Time <= date.lim[2]) |>
+  filter(out.of.water == 0) |>
+  complete(Station,Time = seq.POSIXt(min(Time), max(Time), by = "1 hour")) |>
+  ggplot() +
+  # geom_line(aes( x = Time,
+  #           y = Temp.C)) +
+  geom_line(aes(x = Time, y = Level.m*20, colour = "Water Level")) +
+  geom_line(aes( x = Time, y = Temp.C, colour = "Water Temperature")) +
+  facet_wrap(~Station, ncol = 2) +
+  labs(x = "Time",
+       y = "Temperature (°C)") +
+  theme_bw() +
+  scale_x_datetime(date_labels = "%b-%Y", limits = date.lim) +
+  scale_y_continuous(sec.axis = sec_axis(name = "Water Level (m)",
+                                         trans = ~.x/20),
+                     limits = c(0,31)) +
+  scale_colour_manual( name = "Recording",
+                       breaks = c( 'Water Temperature', 'Water Level' ),
+                       values = c( 'Water Temperature' = 'black',
+                                   'Water Level' = 'blue' ) ) +
+  theme(legend.position = "bottom")
+
+
+
+## Station
+p2 <- water |>
+  filter(River.Number == 81) |>
+  filter(Recording == "Level") |>
+    filter(out.of.water == 0) |>
+    mutate(Temp.C = replace(Temp.C, out.of.water == 1, NA)) |>
+  group_by(Station) |>
+  complete(Time = seq.POSIXt(min(Time), max(Time), by = "1 hour")) |>
+  ungroup() |>
+  ggplot() +
+  # geom_line(aes( x = Time,
+  #           y = Temp.C)) +
+  geom_line(aes(x = Time, y = Level.m*20, colour = "Water Level")) +
+  geom_line(aes( x = Time, y = Temp.C, colour = "Water Temperature")) +
+  facet_wrap(~Station, scales = "free_x", ncol = 2) +
+  labs(x = "Time",
+       y = "Temperature (°C)") +
+  theme_bw() +
+  scale_x_datetime(date_labels = "%b-%Y", limits = date.lim) +
+  scale_y_continuous(sec.axis = sec_axis(name = "Water Level (m)",
+                                         trans = ~.x/20),
+                     limits = c(0,31)) +
+  scale_colour_manual( name = "Recording",
+                       breaks = c( 'Water Temperature', 'Water Level' ),
+                       values = c( 'Water Temperature' = 'black',
+                                   'Water Level' = 'blue' ) ) +
+  theme(legend.position = "none")
+
+p3 <- water |>
+  filter(River.Number == 81) |>
+  filter(Recording == "Hobo Weather Station") |>
+    filter(out.of.water == 0) |>
+    mutate(Temp.C = replace(Temp.C, out.of.water == 1, NA)) |>
+  group_by(Station) |>
+  complete(Time = seq.POSIXt(min(Time), max(Time), by = "1 hour")) |>
+  ungroup() |>
+  ggplot() +
+  # geom_line(aes( x = Time,
+  #           y = Temp.C)) +
+  geom_line(aes(x = Time, y = Level.m*20, colour = "Water Level")) +
+  geom_line(aes( x = Time, y = Temp.C, colour = "Water Temperature")) +
+  facet_wrap(~Station, scales = "free_x", ncol = 2) +
+  labs(x = "Time",
+       y = "Temperature (°C)") +
+  theme_bw() +
+  scale_x_datetime(date_labels = "%b-%Y", limits = date.lim) +
+  scale_y_continuous(sec.axis = sec_axis(name = "Water Level (m)",
+                                         trans = ~.x/20),
+                     limits = c(0,31)) +
+  scale_colour_manual( name = "Recording",
+                       breaks = c( 'Water Temperature', 'Water Level' ),
+                       values = c( 'Water Temperature' = 'black',
+                                   'Water Level' = 'blue' ) ) +
+  theme(legend.position = "none")
+
+P3A <- ggarrange(p1,
+          p2,
+          p3,
+          ncol = 1,
+          common.legend = TRUE,
+          legend = "bottom",
+          labels = c("a", "b", "c"))
+P3B <- water |>
+  filter(River.Number == 81) |>
+  # filter(Recording == "Water") |>
+  filter(!is.na(Temp.C)) |>
+  filter(Time >= date.lim[1] & Time <= date.lim[2]) |>
+  filter(out.of.water == 0) |>
+  complete(Station,Time = seq.POSIXt(min(Time), max(Time), by = "1 hour")) |>
+  ggplot() +
+  # geom_line(aes( x = Time,
+  #           y = Temp.C)) +
+  geom_line(aes(x = Time, y = Level.m*20, colour = "Water Level")) +
+  geom_line(aes( x = Time, y = Temp.C, colour = "Water Temperature")) +
+  # facet_wrap(~Station, ncol = 2) +
+  labs(x = "Time",
+       y = "Temperature (°C)") +
+  theme_bw() +
+  scale_x_datetime(date_labels = "%b-%Y", limits = date.lim) +
+  scale_y_continuous(sec.axis = sec_axis(name = "Water Level (m)",
+                                         trans = ~.x/20),
+                     limits = c(0,31)) +
+  scale_colour_manual( name = "Recording",
+                       breaks = c( 'Water Temperature', 'Water Level' ),
+                       values = c( 'Water Temperature' = 'black',
+                                   'Water Level' = 'blue' ) ) +
+  theme(legend.position = "bottom")
+date.lim <- c(min(water$Time[water$River.Number == 90 & water$Recording == "Hobo Weather Station" & water$Year == 2023]), max(water$Time[water$River.Number == 90 & water$Recording == "Hobo Weather Station"]))
+
+## Water
+p1 <- water |>
+  filter(River.Number == 90) |>
+  filter(Recording == "Water") |>
+  filter(Time >= date.lim[1] & Time <= date.lim[2]) |>
+  filter(out.of.water == 0) |>
+  ggplot() +
+  # geom_line(aes( x = Time,
+  #           y = Temp.C)) +
+  geom_line(aes(x = Time, y = Level.m*20, colour = "Water Level")) +
+  geom_line(aes( x = Time, y = Temp.C, colour = "Water Temperature")) +
+  facet_wrap(~Station, ncol = 2) +
+  labs(x = "Time",
+       y = "Temperature (°C)") +
+  theme_bw() +
+  scale_x_datetime(date_labels = "%b-%Y", limits = date.lim) +
+  scale_y_continuous(sec.axis = sec_axis(name = "Water Level (m)",
+                                         trans = ~.x/20),
+                     limits = c(0,31)) +
+  scale_colour_manual( name = "Recording",
+                       breaks = c( 'Water Temperature', 'Water Level' ),
+                       values = c( 'Water Temperature' = 'black',
+                                   'Water Level' = 'blue' ) ) +
+  theme(legend.position = "bottom")
+
+
+
+## Station
+p2 <- water |>
+  filter(River.Number == 90) |>
+  filter(Recording == "Hobo Weather Station") |>
+  filter(out.of.water == 0) |>
+  group_by(Station) |>
+  complete(Time = seq.POSIXt(min(Time), max(Time), by = "1 hour")) |>
+  ungroup() |>
+  ggplot() +
+  # geom_line(aes( x = Time,
+  #           y = Temp.C)) +
+  geom_line(aes(x = Time, y = Level.m*20, colour = "Water Level")) +
+  geom_line(aes( x = Time, y = Temp.C, colour = "Water Temperature")) +
+  facet_wrap(~Station, scales = "free_x", ncol = 2) +
+  labs(x = "Time",
+       y = "Temperature (°C)") +
+  theme_bw() +
+  scale_x_datetime(date_labels = "%b-%Y", limits = date.lim) +
+  scale_y_continuous(sec.axis = sec_axis(name = "Water Level (m)",
+                                         trans = ~.x/20),
+                     limits = c(0,31)) +
+  scale_colour_manual( name = "Recording",
+                       breaks = c( 'Water Temperature', 'Water Level' ),
+                       values = c( 'Water Temperature' = 'black',
+                                   'Water Level' = 'blue' ) ) +
+  theme(legend.position = "none")
+
+P4A <- ggarrange(p1,
+          p2,
+          ncol = 1,
+          common.legend = TRUE,
+          legend = "bottom",
+          labels = c("a", "b"))
+
+## Water
+P4B <- water |>
+  filter(River.Number == 90) |>
+  filter(Recording == "Water") |>
+  filter(Time >= date.lim[1] & Time <= date.lim[2]) |>
+  filter(out.of.water == 0) |>
+  ggplot() +
+  # geom_line(aes( x = Time,
+  #           y = Temp.C)) +
+  geom_line(aes(x = Time, y = Level.m*20, colour = "Water Level")) +
+  geom_line(aes( x = Time, y = Temp.C, colour = "Water Temperature")) +
+  facet_wrap(~Station, ncol = 2) +
+  labs(x = "Time",
+       y = "Temperature (°C)") +
+  theme_bw() +
+  scale_x_datetime(date_labels = "%b-%Y", limits = date.lim) +
+  scale_y_continuous(sec.axis = sec_axis(name = "Water Level (m)",
+                                         trans = ~.x/20),
+                     limits = c(0,31)) +
+  scale_colour_manual( name = "Recording",
+                       breaks = c( 'Water Temperature', 'Water Level' ),
+                       values = c( 'Water Temperature' = 'black',
+                                   'Water Level' = 'blue' ) ) +
+  theme(legend.position = "bottom")
+
+P1A
+P2A
+P3A
+P4A
+
+
+# ggsave(P1A, file = "./output/figures/P1.png", device = "png", height = 6, width = 4, units = "in")
+# ggsave(P2A, file = "./output/figures/P2.png", device = "png", height = 6, width = 4, units = "in")
+# ggsave(P3A, file = "./output/figures/P3.png", device = "png", height = 6, width = 4, units = "in")
+# ggsave(P4A, file = "./output/figures/P4.png", device = "png", height = 4.5, width = 4, units = "in")
+```
+
+```{r high level summary, eval = FALSE, echo = FALSE}
+
+bind_rows(LabsumMonthly, salmonidMonthly) |> 
+  distinct() |> 
+  filter(Month == 6 | Month == 7 | Month == 8) |> 
+  filter(Year >=2022) |> 
+  group_by(Year, Month) |> 
+  summarise(MeanTemp = mean(avgTemp), sdTemp = sd(avgTemp),
+            MaxLower = min(maxTemp),
+            MaxUpper = max(maxTemp),
+            MaxMean = mean(maxTemp),
+            MaxSD = sd(maxTemp))
+
+
+above20 |> 
+  filter(Detachment != "Goose Bay") |> 
+  group_by(Year, MonthName) |> 
+  summarise(meanP = mean(Percent, na.rm = TRUE),
+            sdP = sd(Percent, na.rm = TRUE))
+
+above25 |> 
+  filter(Detachment != "Goose Bay") |> 
+  group_by(Year, MonthName) |> 
+  summarise(meanP = mean(Percent, na.rm = TRUE),
+            sdP = sd(Percent, na.rm = TRUE))
+
+monthly |> 
+  filter(Detachment != "Goose Bay") |> 
+  group_by(year, Month) |> 
+  summarise(MeanTemp = mean(Mean_Temp),
+            sdTemp = sd(Mean_Temp),
+            MaxLower = min(Max),
+            MaxUpper = max(Max),
+            MaxMean = mean(Max),
+            MaxSD = sd(Max))
+
+```
+
+```{r temp max}
+daily |> 
+  group_by(year, month, Detachment, Date) |>
+  summarise(MeanDaily = mean(Daily_Temp),
+            MeanMax = mean(Tmax)) |> 
+  ungroup() |> 
+  group_by(year, month, Detachment) |> 
+  filter(MeanMax >= 18) |> 
+  filter(Date == min(Date)) |> 
+  ungroup() |> 
+  filter(month %in% c(6,7,8)) |> 
+  dplyr::select(Detachment, year, month, MeanMax, Date)
+
+
+above18Max <- daily |> 
+  group_by(year, month, Detachment, Date) |>
+  summarise(MeanDaily = mean(Daily_Temp),
+            MeanMax = mean(Tmax),
+            sdMax = sd(Tmax)) |> 
+  ungroup() |> 
+    filter(month %in% c(6,7,8)) |> 
+  group_by(year, Detachment) |> 
+  filter(MeanMax >= 18) |> 
+  filter(Date == min(Date)) |> 
+  ungroup() |> 
+  dplyr::select(Detachment, year, month, MeanMax, sdMax, Date) |> 
+  rename(Date.Max.Above.18 = Date)
+
+above18Mean <- daily |> 
+  group_by(year, month, Detachment, Date) |>
+  summarise(MeanDaily = mean(Daily_Temp),
+            MeanMax = mean(Tmax),
+            sdDaily = sd(Daily_Temp)) |> 
+  ungroup() |> 
+    filter(month %in% c(6,7,8)) |> 
+  group_by(year, Detachment) |> 
+  filter(MeanDaily >= 18) |> 
+  filter(Date == min(Date)) |> 
+  ungroup() |> 
+  dplyr::select(Detachment, year, month, MeanDaily, sdDaily, Date) |> 
+  rename(Date.Mean.Above.18 = Date)
+
+above18 <- full_join(above18Max, above18Mean)
+
+write.csv(above18, file = "./output/above18summary.csv")
+
+```

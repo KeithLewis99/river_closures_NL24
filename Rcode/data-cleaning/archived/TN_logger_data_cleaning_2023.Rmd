@@ -1,0 +1,241 @@
+---
+title: "2023 logger data QC"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = 'C:/Users/Geissingere/Documents/Projects/Temperature-Project/')
+library(tidyverse)
+library(lubridate)
+library(ggpubr)
+```
+
+```{r raw data}
+## ---- data -----
+temperature <- read.csv("./data-working/output/TNlogger-data-2023-full.csv") |> 
+  ## format datetime
+  mutate(Time = ymd_hms(paste(Date, Time, sep = " "))) |> 
+  ## format date column
+  mutate(Date = ymd(Date)) |> 
+  ## create a year only column
+  mutate(Year = year(Date)) |> 
+   ## format date deployed
+  mutate(Date.deployed = ymd(Deployed)) |> 
+  ## arrange columns in proper order
+  dplyr::select(Time, Temp.C, Serial, Recording, Station, Lat, Long, SFA, River.Number, River,
+                Date, Year,
+                Date.deployed) |> 
+  ## correct wrong years
+  mutate(Date.deployed = replace(Date.deployed, Serial == 21159036, as_date("2022-06-02")),
+         Date.deployed = replace(Date.deployed, Serial == 21401693, as_date("2022-05-22")),
+         Date.deployed = replace(Date.deployed, Serial == 21401681, as_date("2022-05-12")),
+         Date.deployed = replace(Date.deployed, Serial == 21401684, as_date("2022-05-12")))
+ 
+```
+
+```{r date filter}
+## ---- filter data based on deployment time -----
+
+t1 <- temperature |> 
+  filter(!is.na(Date.deployed)) |> 
+  filter(Date > Date.deployed )
+
+
+```
+
+```{r filter check 1, warning = FALSE, echo = FALSE}
+## check differences
+checkdiff <- anti_join(temperature, t1)
+
+nrow(t1) + nrow(checkdiff) == nrow(temperature)
+
+SNlist <- unique(temperature$Serial)
+
+for (i in seq_along(SNlist)) {
+  p1 <- temperature |> 
+    filter(Serial == SNlist[i]) |> 
+    filter(!is.na(Temp.C)) |> 
+    ggplot() +
+    geom_point(aes(x = Time, y = Temp.C)) +
+    ggtitle(paste("Raw: ", SNlist[i])) +
+    ylim(min(temperature$Temp.C[temperature$Serial == SNlist[i]], na.rm = TRUE),
+         max(temperature$Temp.C[temperature$Serial == SNlist[i]], na.rm = TRUE)) +
+    xlim(min(temperature$Time[temperature$Serial == SNlist[i]], na.rm = TRUE),
+         max(temperature$Time[temperature$Serial == SNlist[i]], na.rm = TRUE))
+  p2 <- checkdiff |> 
+    filter(Serial == SNlist[i]) |> 
+    filter(!is.na(Temp.C)) |> 
+    ggplot() +
+    geom_point(aes(x = Time, y = Temp.C)) +
+    ggtitle(paste("Removed: ", SNlist[i])) +
+    ylim(min(temperature$Temp.C[temperature$Serial == SNlist[i]], na.rm = TRUE),
+         max(temperature$Temp.C[temperature$Serial == SNlist[i]], na.rm = TRUE)) +
+    xlim(min(temperature$Time[temperature$Serial == SNlist[i]], na.rm = TRUE),
+         max(temperature$Time[temperature$Serial == SNlist[i]], na.rm = TRUE))
+  p3 <- t1 |> 
+    filter(Serial == SNlist[i]) |> 
+    filter(!is.na(Temp.C)) |> 
+    ggplot() +
+    geom_point(aes(x = Time, y = Temp.C)) +
+    ggtitle(paste("Retained: ", SNlist[i])) +
+    ylim(min(temperature$Temp.C[temperature$Serial == SNlist[i]], na.rm = TRUE),
+         max(temperature$Temp.C[temperature$Serial == SNlist[i]], na.rm = TRUE)) +
+    xlim(min(temperature$Time[temperature$Serial == SNlist[i]], na.rm = TRUE),
+         max(temperature$Time[temperature$Serial == SNlist[i]], na.rm = TRUE))
+  
+  p <- ggarrange(p1, p2, p3, nrow = 1)
+  print(p)
+  
+}
+```
+
+
+
+
+```{r water level filter}
+
+t2.1 <- t1 |> 
+  filter(Recording != "Air") |> 
+  filter(Temp.C >= -1 | is.na(Temp.C)) |> 
+  filter(!is.na(Temp.C)) |> 
+  mutate(out.of.water = NA)
+
+t2.2 <- t1 |> 
+  filter(Recording == "Air") |> 
+  mutate(out.of.water = NA)
+
+t2 <- bind_rows(t2.1, t2.2)
+
+# create dataframe with the river and out of water dates and pair with loggers on that river (already verified loggers are consistent)
+
+## will verify logger consistency more once statsitics course is complete
+
+OUT <- t2 |> 
+  filter(out.of.water == 1) |> 
+  dplyr::select(Time, Station, out.of.water) |> 
+  rename(out.of.water2 = out.of.water)
+
+# list of stations that come out of water
+OUT1 <- t2 |>
+  filter(out.of.water == 1) |>
+  distinct(Station)
+
+# time when out of water vs in water
+OUT2 <- t2 |> filter(Station %in% OUT1$Station) |>
+  filter(Recording == "Level") |>
+  mutate(out.of.water = replace(out.of.water, is.na(out.of.water), 0)) |>
+  group_by(Station) |>
+  arrange(Time) |>
+  ## create block based on each time it switches from in to out of water
+  mutate(change = out.of.water - lag(out.of.water),
+         change = replace(change, is.na(change) | change!= 0, 1)) |>
+  mutate(group = cumsum(change)) |>
+  ungroup() |>
+  mutate(out.of.water2 = out.of.water,
+         out.of.water2 = replace(out.of.water2, out.of.water2 == 0, NA)) |> 
+  ## group by station and group to calculate min and max time of each
+  group_by(Station, group) |>
+  filter(Time == min(Time) | Time == max(Time)) |>
+  ## format Time for rolling join
+  mutate(Time1 = Time,
+         Time1 = replace(Time1, Time == max(Time), NA),
+         Time2 = Time,
+         Time2 = replace(Time2, Time == min(Time), NA)) |> 
+  ## merge time 1 and time 2 to the same row
+  mutate(Time2 = lead(Time2)) |> 
+  filter(!is.na(Time1) & !is.na(Time2)) |> 
+  ## select columns for the next join
+  dplyr::select(Station, out.of.water2, group, Time1, Time2) |> 
+  ungroup()
+
+# merge for only stations with level data
+t3 <- t2 |> 
+  left_join(OUT2, join_by(Station, between(Time, Time1, Time2)), unmatched = "error") |> 
+  mutate(out.of.water = coalesce(out.of.water, out.of.water2),
+         out.of.water = replace(out.of.water, is.na(out.of.water), 0),
+         out.of.water = replace(out.of.water, Recording == "Air", NA)) |>
+  dplyr::select(-out.of.water2)
+
+
+```
+
+```{r filter check 2, warning = FALSE, echo = FALSE}
+
+SNlist <- unique(t1$Serial)
+
+for (i in seq_along(SNlist)) {
+  p1 <- t1 |> 
+    filter(Serial == SNlist[i]) |> 
+    filter(!is.na(Temp.C)) |> 
+    ggplot() +
+    geom_point(aes(x = Time, y = Temp.C)) +
+    ggtitle(paste(t1$Recording[t1$Serial==SNlist[i]], SNlist[i], t1$Station[t1$Serial == SNlist[i]])) +
+    ylim(min(t1$Temp.C[t1$Serial == SNlist[i]], na.rm = TRUE),
+         max(t1$Temp.C[t1$Serial == SNlist[i]], na.rm = TRUE)) +
+    xlim(min(t1$Time[t1$Serial == SNlist[i]], na.rm = TRUE),
+         max(t1$Time[t1$Serial == SNlist[i]], na.rm = TRUE))
+  p2 <- t2 |> 
+    filter(Serial == SNlist[i]) |> 
+    filter(!is.na(Temp.C)) |> 
+    ggplot() +
+    geom_point(aes(x = Time, y = Temp.C)) +
+    ggtitle(paste(t1$Recording[t1$Serial==SNlist[i]], SNlist[i], t1$Station[t1$Serial == SNlist[i]])) +
+    ylim(min(t1$Temp.C[t1$Serial == SNlist[i]], na.rm = TRUE),
+         max(t1$Temp.C[t1$Serial == SNlist[i]], na.rm = TRUE)) +
+    xlim(min(t1$Time[t1$Serial == SNlist[i]], na.rm = TRUE),
+         max(t1$Time[t1$Serial == SNlist[i]], na.rm = TRUE))
+  p3 <- t3 |> 
+    filter(Serial == SNlist[i]) |> 
+    # filter(!is.na(Temp.C)) |> 
+    ggplot() +
+    geom_point(aes(x = Time, y = Temp.C, colour = as.character(out.of.water))) +
+    ggtitle(paste(t3$Recording[t3$Serial==SNlist[i]], SNlist[i], t3$Station[t3$Serial==SNlist[i]]))  +
+    ylim(min(t1$Temp.C[t1$Serial == SNlist[i]], na.rm = TRUE),
+         max(t1$Temp.C[t1$Serial == SNlist[i]], na.rm = TRUE)) +
+    xlim(min(t1$Time[t1$Serial == SNlist[i]], na.rm = TRUE),
+         max(t1$Time[t1$Serial == SNlist[i]], na.rm = TRUE)) +
+    scale_color_manual(values = c("black", "red")) +
+    theme(legend.position = "bottom")
+  
+  p <- ggarrange(p1, p2, p3, nrow = 1)
+  print(p)
+  
+}
+```
+
+
+
+```{r 2022/2023, echo = FALSE}
+
+
+### check timezone and set to utc
+TZs <- read.csv("./data-working/output/2023-timezones.csv") |> 
+  mutate(TZ = str_remove(TZ, pattern = "Minilog Initialized: "))
+
+### All TZs are UTC-2.5 or NDT
+
+t1.TZ <- t1 |> 
+  mutate(Time.UTC = Time + dhours(2.5),
+         Time.UTC = with_tz(Time.UTC, tzone = 'UTC'))
+
+
+
+```
+
+
+```{r write data}
+
+tfinal <- t1.TZ |> 
+  rename(Date.Time = Time) |> 
+  mutate(Date = date(Date.Time),
+         Time = format(as.POSIXct(Date.Time), format = "%H:%M:%S")) |> 
+  mutate(Date.UTC = date(Time.UTC),
+         Time.UTC = format(as.POSIXct(Time.UTC), format = "%H:%M:%S"))
+
+write.csv(tfinal, "./data-working/output/TNlogger-data-2023-cleaned.csv", row.names = FALSE)
+
+```
+
+

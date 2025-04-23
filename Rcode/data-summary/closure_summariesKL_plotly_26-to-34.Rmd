@@ -1,0 +1,49 @@
+---
+title: "Closure Summaries Plotly"
+output:
+  html_document: 
+    df_print: paged
+  word_document: default
+  pdf_document: default
+date: "`r Sys.Date()`"
+authors: Emilie Geissinger, Curtis Pennell, Brianna Newton, Chelsea Bloom, and Keith Lewis
+affiliation: Coastal and Freshwater Ecology
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = 'C:/Users/lewiske/Documents/CAFE/projects/temperature/river_closures')
+options(knitr.kable.NA = '')
+
+library(tidyverse)
+library(lubridate)
+library(knitr)
+library(ggpubr)
+library(osmdata)
+library(sf)
+library(geodata)
+library(kableExtra)
+```
+
+
+```{r loggers, echo = FALSE, warning = FALSE, message= FALSE}
+#source("Rcode/data-summary/environmental-protocol-data.R")
+source("closure_summaries.R")
+
+```
+
+```{r ggplotly, echo = FALSE, warning = FALSE, message= FALSE}
+
+river_closures_plotly(26)
+
+river_closures_plotly(30)
+
+river_closures_plotly(31)
+
+river_closures_plotly(32)
+
+river_closures_plotly(33)
+
+river_closures_plotly(34)
+
+```

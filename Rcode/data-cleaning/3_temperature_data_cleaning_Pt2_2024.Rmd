@@ -1,0 +1,365 @@
+---
+title: "3_Data-Exploration"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+```{r, echo = F}
+print("the purpose of this file is to filter out before for cases where deployment date wasn't written, remove after similar for end of season; removechunk is the in betweens for when logger was out of water or not working: figs show initial data and then cleaned  ")
+```
+
+
+```{r setup, include=FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#knitr::opts_knit$set(root.dir = 'C:/Users/Geissingere/Documents/Projects/Temperature-Project')
+knitr::opts_knit$set(root.dir = 'C:/Users/lewiske/Documents/CAFE/projects/temperature/river_closures')
+options(knitr.kable.NA = '')
+
+library(tidyverse)
+library(lubridate)
+library(knitr)
+# library(pandoc)
+# library(kableExtra)
+library(ggpubr)
+library(leaflet)
+
+```
+
+```{r data setup, message = FALSE, echo = FALSE, warning = FALSE}
+# just weather stations
+hobo23 <- read.csv("./data-working/output/hobo-station-data-2023-combined.csv") |> 
+  mutate(SFA = as.character(SFA)) # 2023 needs to be included for this year
+hobo24 <- read.csv("./data-working/output/hobo-station-data-2024-combined.csv")
+hobo24$SFA <- as.character(hobo24$SFA)
+
+hobo <- bind_rows(hobo23, hobo24) |>
+  distinct() |> 
+  mutate(Time.UTC = ymd_hms(Time.UTC, tz = "UTC"),
+         Time = with_tz(Time.UTC, tzone = "America/St_Johns"))
+
+    
+# data2022 <- read.csv("./data-working/output/logger-data-2022-cleaned.csv") |> 
+#   mutate(Depth.cm = as.integer(Depth.cm)) |> 
+#   distinct()
+# 
+# data2023 <- read.csv("./data-working/output/logger-data-2023-cleaned.csv") |> 
+#   distinct()
+
+# bluetooth
+data2024 <- read.csv("./data-working/output/logger-data-2024-combined.csv") |> 
+  distinct() 
+# 
+
+loggers24 <- data2024 |>
+  mutate(Time.UTC = ymd_hms(paste(Date.UTC, Time.UTC), tz = "UTC"),
+         Time = with_tz(Time.UTC, tzone = "America/St_Johns")) |> 
+  dplyr::select(-Date.Time) |> 
+  mutate(Date = ymd(Date),
+         SFA = as.character(SFA)) |> 
+  distinct() 
+
+full <- hobo |> 
+  dplyr::select(Time, Time.UTC, Station, Serial, WaterLevel_meters, WaterTemperature_C, SFA, River.Number, River.Name, lat, long, out.of.water) |> 
+  mutate(Recording = "Hobo Weather Station",
+         Serial = as.character(Serial)) |> 
+  rename(Temp.C = WaterTemperature_C,
+         Level.m = WaterLevel_meters,
+         Lat = lat,
+         Long = long) |> 
+  mutate(Date = date(Time),
+         Year = year(Time)) |> 
+  bind_rows(loggers24) |> 
+  ## create an ID column
+  mutate(StationID = paste(Station, Serial))
+
+water <- full |> 
+  filter(Recording != "Air")
+
+```
+
+```{r stations, echo = FALSE, warning = FALSE, message = FALSE}
+# ---- Upload station data ----
+# source("./Rcode/data-cleaning/0_logger-metadata-2024.R")
+```
+
+
+### data check
+
+```{r raw temperature figs, echo = FALSE, warning=FALSE, message = FALSE}
+## 
+SNlist <- unique(full$StationID)
+
+for (i in seq_along(SNlist)) {
+  p <- full |> 
+    filter(StationID == SNlist[i]) |> 
+    filter(!is.na(Temp.C)) |> 
+    ggplot() +
+    geom_point(aes(x = Time, y = Temp.C, colour = as.character(out.of.water))) +
+    ggtitle(paste(full$Recording[full$StationID==SNlist[i]], SNlist[i])) +
+    scale_color_manual(values = c("black", "red", "green")) +
+    theme(legend.position = "bottom") +
+    scale_x_datetime(date_labels = "%d-%b-%y")
+  
+  print(p)
+  
+}
+
+```
+
+
+```{r temperature data cleaning, warning = FALSE}
+#' the following code chunk allows for data to be cleaned after evaluating the above graphs
+#' IMPORTANT: this was in progress so will require updating/verification
+#' pattern is remove records for a time period and create a cutoff value manually; then use the Serial numbers to filter from the full dataframe and create a logical value (remove) based on the cutoff; then bind all of these (RemoveAll) and merge with the full data set
+
+remove <- c('21417670', '21042555', '21031909') # Codroy (SAEN - partner), Northwest Brook Mile Pool (blue tooth; Terra Nova - partner), Caroline Upper (bluetooth; in Brianna's files;  ) - querried from current.loggers in 0_logger-metadata-2024.R; these may be level loggers
+# why are these loggers in the hobo/bluetooth - could be any number of reasons why these were removed
+# temp <- full |> filter(Serial %in% remove)
+# Here's what I think as of 12:11.  
+# The only Serial number that is removed when using CJP is  21031909 the query above has 8366 rows.  Full has 763053 rows and full2 has 754687 rows - difference is 8366
+# The Codroy is a partner logger and we don't need to worry about it for now. May have been put in the wrong folder 
+# 
+# Northwest Brook Mile Pool is bluetooth but out by TN - its on the shared drive but was not deployed?  
+# 
+# The one I was calling Caroline Upper (based on current.loggers) comes up as Simms Brook here.  Were the loggers moved?
+
+
+# these are on shared drive but not CJP approved
+removeafter <- data.frame(Serial = 21368518,
+                          Station = "Exploits Goodyears Dam",
+                      cutoff = "2023-10-17 11:17:00") |> ## goodyears dam - moved after 2023
+  ## Bay de l'eau removed after 2023 season - never worked
+  add_row(Serial = 21560025,
+          Station = "Bay de l'Eau",
+          cutoff = "2024-01-01 00:00:00") |> 
+   add_row(Serial = 21315544, # water level goes flat
+          Station = "Burlington River",
+          cutoff = "2024-09-05 12:00:00") |>
+  mutate(cutoff = ymd_hms(cutoff)) |>
+    mutate(Serial = as.character(Serial)) |> 
+  mutate(state = "not deployed")
+  
+
+# remove after from the full data set - cutoff is introduced here
+remove1 <- full |>
+  filter(Serial %in% removeafter$Serial) |>
+  left_join(removeafter) |>
+  mutate(remove = Time >= cutoff) |>
+  filter(remove == TRUE) 
+
+# discussed with Curtis - suggest cutoff for six hours after logger in the water - look at plotly graph and then csv file to check water levels
+removebefore <- data.frame(Serial = 21931677,
+                           cutoff = "2024-06-22 14:09:00") |> # Peircey's brook cellular station
+  ## Torrent River Fishway cellular stsation
+  add_row(Serial = 21560020,
+          cutoff = "2024-05-29 22:30:00") |> 
+  ## Burgeo
+  add_row(Serial = 21315544,
+          cutoff = " 2024-06-26 00:30:00") |> 
+  ## unknown logger
+  add_row(Serial = 21158042,
+          cutoff = "2023-06-15 21:30:00") |> 
+  ## unknown logger
+  add_row(Serial = 21290092,
+          cutoff = "2024-06-08 15:30:00") |> 
+  ## uknown logger
+  add_row(Serial = 21042542,
+          cutoff = "2024-06-10 13:30:00") |> 
+  ## Humber
+  add_row(Serial = 21931676,
+          cutoff = "2024-06-26 16:00:00") |> 
+  ## Little Barachois
+  add_row(Serial = 21931680,
+          cutoff = "2024-06-26 16:00:00") |> 
+   # Burlington - logger out of water before this date - water level flat
+   add_row(Serial = 21931680,
+          cutoff = "2024-06-26 16:00:00") |> 
+   # Shinnery - temp from 2023-06-01 to 2023-06-05 is erratic - fluctuations up to 19 and 24 and no data for 3rd or 4th of June
+   add_row(Serial = 21474804,
+          cutoff = "2023-06-05 23:00:00") |> 
+
+  mutate(cutoff = ymd_hms(cutoff)) |> 
+  mutate(state = "not deployed") |> 
+  mutate(Serial = as.character(Serial)) 
+
+## before - 
+remove2 <- full |>
+  filter(Serial %in% removebefore$Serial) |> # filter out the loggers that need to be removed
+  left_join(removebefore) |> # join the data set
+  mutate(remove = Time <= cutoff) |> # creates a logical column that is then used as a filter
+  filter(remove == TRUE)
+
+# these may be due to being out of water or some concern about malfunction
+removechunk <- data.frame(Serial = 21269692,
+          Start = "2023-07-31 19:30:00",
+          Stop = "2023-10-16 05:30:00") |>   ## caroline brook station
+  ## caroline brook station
+  add_row(Serial = 21269692,
+          Start = "2024-07-25 09:30:00",
+          Stop = "2024-08-21 17:30:00") |> 
+    ## caroline brook station
+  add_row(Serial = 21269692,
+          Start = "2024-01-24 23:30:00",
+          Stop = "2024-02-04 20:30:00") |> 
+    mutate(Serial = as.character(Serial))
+
+
+## chunk
+remove3 <- full |>
+  filter(Serial %in% removechunk$Serial) |>
+  left_join(removechunk) |>
+  # mutate(remove = FALSE,
+  #        remove = replace(remove, Time > Start & Time < Stop, TRUE))
+  mutate(remove1 = Time >= Start,
+         remove2 = Time <= Stop) |> 
+  mutate(remove = remove1==remove2) |> 
+  filter(remove == TRUE) |> 
+  dplyr::select(-remove1, -remove2) |> 
+  mutate(state = "out of water")
+
+# HL <- c(21031911, 21031929, 20565287, 21031924,20565268,21022453,21031917)
+
+# remove4 <- full |> 
+#   filter(Serial %in% HL) |> 
+#   filter(Time < "2021-07-27 00:00:00") |> 
+#   mutate(state = "not deployed")
+
+# RemoveAll <- bind_rows(remove1, remove2, remove3, remove4) |>
+#   mutate(keep = 0)
+
+# binds rows but adds a column to indicate if the record should be removed in full2 below
+RemoveAll <- bind_rows(remove1, remove2, remove3) |>
+  mutate(keep = 0) 
+
+# this is where the cutoff's are merged with the full data set
+full2 <- full |>
+  mutate(Serial = as.character(Serial)) |>
+  filter(!Serial %in% remove) |>
+  # mutate(Serial = as.integer(Serial)) |>
+  left_join(RemoveAll) |>
+  mutate(keep = replace(keep, is.na(keep), 1)) |>
+  mutate(Temp.C = replace(Temp.C, state == "not deployed", NA),
+         out.of.water = replace(out.of.water, state == "out of water", 2)) |> 
+  mutate(out.of.water = factor(out.of.water))
+
+
+```
+
+
+### cleaned data
+
+```{r cleaned temperature figs, echo = FALSE, warning=FALSE, message = FALSE}
+## 
+SNlist <- unique(full2$StationID)
+
+for (i in seq_along(SNlist)) {
+  p <- full2 |> 
+    filter(StationID == SNlist[i]) |> 
+    filter(!is.na(Temp.C)) |> # this filters out the NA temps
+    ggplot() +
+    geom_point(aes(x = Time, y = Temp.C, colour = as.character(out.of.water))) +
+    ggtitle(paste(full$Recording[full$StationID==SNlist[i]], SNlist[i])) +
+    scale_color_manual(values = c("black", "red", "green")) +
+    theme(legend.position = "bottom") +
+    scale_x_datetime(date_labels = "%d-%b-%y")
+  
+  print(p)
+  
+}
+
+```
+
+
+
+### Loggers removed from data 
+
+```{r removed temperature figs, echo = FALSE, warning=FALSE, message = FALSE}
+##
+SNlist <- remove
+
+for (i in seq_along(SNlist)) {
+  p <- full |>
+    filter(Serial == SNlist[i]) |>
+    filter(!is.na(Temp.C)) |>
+    ggplot() +
+    geom_point(aes(x = Time, y = Temp.C, colour = as.character(out.of.water))) +
+    ggtitle(paste(full$Recording[full$Serial==SNlist[i]], SNlist[i], full$Station[full$Serial == SNlist[i]])) +
+    scale_color_manual(values = c("black", "red", "green")) +
+    theme(legend.position = "bottom") +
+    scale_x_datetime(date_labels = "%d-%b-%y")
+
+  print(p)
+
+}
+
+```
+
+
+```{r temp filter2 }
+
+# water2 <- water |>
+#   mutate(Serial = as.character(Serial)) |>
+#   filter(!Serial %in% remove) |>
+#   mutate(Serial = as.integer(Serial)) |>
+#   left_join(RemoveAll) |>
+#   mutate(keep = replace(keep, is.na(keep), 1)) |>
+#   filter(keep == 1) |>
+#   dplyr::select(-keep)
+# 
+
+waterfinal <- water |>
+  mutate(Serial = as.character(Serial)) |>
+  filter(!Serial %in% remove) |>
+  # mutate(Serial = as.integer(Serial)) |>
+  left_join(RemoveAll) |>
+  mutate(keep = replace(keep, is.na(keep), 1)) |>
+  mutate(Temp.C = replace(Temp.C, state == "not deployed", NA),
+         out.of.water = replace(out.of.water, state == "out of water", 1)) |> 
+  mutate(out.of.water = factor(out.of.water)) |> 
+  dplyr::select(Date.UTC, Time.UTC, Station, Serial, Level.m, Temp.C, SFA, River.Number, River.Name, Lat, Long, out.of.water, Recording, Date, Year, Logger.Type, Depth.cm, Location.description, Date.deployed.MDY, Time.deployed)
+
+waterfinal$Time.UTC <- as.character(waterfinal$Time.UTC)
+```
+
+
+
+```{r previous data}
+water22 <- read.csv("./data-working/output/compiled-water-temperature-2014to2022.csv") |> 
+  mutate(Serial = as.character(Serial),
+         out.of.water= replace(out.of.water, out.of.water == 2, 1),
+         out.of.water = as.factor(out.of.water),
+         Date = ymd(Date))
+water22$SFA <- as.character(water22$SFA)
+
+water23 <- read.csv("./data-working/output/compiled-water-temperature-2023.csv") |> 
+  mutate(Serial = as.character(Serial),
+         out.of.water= replace(out.of.water, out.of.water == 2, 1),
+         out.of.water = as.factor(out.of.water),
+         Date = ymd(Date))
+water23$SFA <- as.character(water23$SFA)
+
+waterfinal2 <- bind_rows(waterfinal, water22, water23) |> 
+  mutate(Time.UTC2 = ymd_hms(paste(Date.UTC, Time.UTC))) |> 
+  arrange(Time.UTC2, Station) |> 
+  ## remove duplicates
+  distinct() |> 
+  dplyr::select(-Time.UTC2)
+
+water22 <- waterfinal2 |>
+  filter(Year <= 2022)
+water23 <- waterfinal2 |> 
+  filter(Year == 2023)
+water24 <- waterfinal2 |> 
+  filter(Year == 2024)
+
+```
+
+
+
+```{r save file}
+
+write.csv(water22, "./data-working/output/compiled-water-temperature-2014to2022.csv", row.names = FALSE)
+write.csv(water23, "./data-working/output/compiled-water-temperature-2023.csv", row.names = FALSE)
+write.csv(water24, "./data-working/output/compiled-water-temperature-2024.csv", row.names = FALSE)
+
+```

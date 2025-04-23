@@ -1,0 +1,696 @@
+---
+title: "River Closures at different temperature thresholds"
+output:
+  word_document: default
+date: "`r Sys.Date()`"
+authors: "Emilie Geissinger, Curtis Pennell, Brianna Newton, and Chelsea Bloom"
+affiliation: "Coastal and Freshwater Ecology"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#knitr::opts_knit$set(root.dir = 'C:/Users/Geissingere/Documents/Projects/Temperature-Project')
+knitr::opts_knit$set(root.dir = 'C:/Users/lewiske/Documents/CAFE/projects/temperature/river_closures')
+options(knitr.kable.NA = '')
+
+library(tidyverse)
+library(lubridate)
+library(knitr)
+library(ggpubr)
+library(osmdata)
+library(sf)
+library(geodata)
+```
+
+
+```{r loggers, echo = FALSE, warning = FALSE, message= FALSE}
+source("./Rcode/data-cleaning/logger-metadata-2024.R")
+```
+
+```{r data upload, message = FALSE, echo = FALSE, warning = FALSE}
+
+# source("./Rcode/data-cleaning/hobolink_station_combo.R")
+# source("./Rcode/data-cleaning/hobolink_station_cleaning.R")
+
+water22 <- read.csv("./data-working/output/compiled-water-temperature-2014to2022.csv") |> 
+  mutate(Serial = as.character(Serial),
+         SFA = as.character(SFA))
+water23 <- read.csv("./data-working/output/compiled-water-temperature-2023.csv") |> 
+  mutate(Serial = as.character(Serial),
+         SFA = as.character(SFA))
+water24 <- read.csv("./data-working/output/compiled-water-temperature-2024.csv") |> 
+  mutate(SFA = as.character(SFA))
+
+partner.data <- read.csv("./data-working/output/compiled-partner-data-2024.csv") |> 
+  mutate(Serial = as.character(Serial)) 
+
+waterfull <- bind_rows(water22, water23, water24, partner.data) |> 
+  mutate(Date.UTC = ymd(Date.UTC),
+         Time.UTC = ymd_hms(paste(Date.UTC, Time.UTC), tz = "UTC")) |> 
+  filter(Year >= 2022) |> 
+  mutate(Time = with_tz(Time.UTC, tzone = "America/St_Johns")) |> 
+  mutate(Date = date(Time))
+
+## additional station/river info
+rivers <- data.frame(Station = c("GreyRiver", "Eagle", "Sandhill", "Lomond", "NEPlacentia", "NorthArm", "Salmonier", "TraverseBrook", " CharBrook2", "CharBrook", "CharBrook1", "HuntRiver", "HuntRiverTroutPool", "MacclesMouth", "StLewisRiver", "Connie River ", "Torrent River"),
+                     River.Name2 = c("Grey River", "Eagle River", "Sand Hill River", "Lomond Main River", "Northeast River, Placentia", "North Arm River, Holyrood", "Salmonier River", "Traverse Brook", "Char Brook", "Char Brook", "Char Brook", "Hunt River", "Hunt River", "Terra Nova River", "St. Lewis River", "Conne River", "Torrent River"),
+                     River.Number2 = c(121, 10, 11, 154, 90, 75, 81, 58, 1, 1, 1, 2, 2, 62, 179, 116, 162),
+                     SFA2 = c('11','2', '2', '14A', '10', '7', '9', '5', '1', '1', '1', '1', '1', '5', '2', '11', '14A'))
+
+
+
+water1 <- waterfull |> 
+  filter(out.of.water == 0) |> 
+  filter(!is.na(Temp.C)) |> 
+  ## remove the northwest brook short term loggers
+  mutate(Serial = as.integer(Serial)) |> 
+  filter(!is.na(Serial)) |> 
+  mutate(River.Name = replace(River.Name, River.Name == "", NA)) |> 
+  left_join(rivers, join_by(Station)) |> 
+  mutate(River.Name = coalesce(River.Name, River.Name2),
+         River.Number = coalesce(River.Number, River.Number2),
+         SFA = coalesce(SFA, SFA2)) |> 
+  dplyr::select(-River.Name2, -River.Number2, -SFA2) |> 
+  filter(!is.na(SFA)) |> 
+  ## select necessary data for this analysis
+  filter(Year == 2023) |> 
+  filter(!River.Name %in% c("Char Brook", "Eagle River", "Shoal Harbour River, Trinity Bay", "Come By Chance River", "Conne River", "South Branch of Great Codroy", "Exploits River"))
+
+water2 <- waterfull |> 
+  filter(out.of.water == 0) |> 
+  filter(!is.na(Temp.C)) |> 
+  ## remove the northwest brook short term loggers
+  mutate(Serial = as.integer(Serial)) |> 
+  filter(!is.na(Serial)) |> 
+  mutate(River.Name = replace(River.Name, River.Name == "", NA)) |> 
+  left_join(rivers, join_by(Station)) |> 
+  mutate(River.Name = coalesce(River.Name, River.Name2),
+         River.Number = coalesce(River.Number, River.Number2),
+         SFA = coalesce(SFA, SFA2)) |> 
+  dplyr::select(-River.Name2, -River.Number2, -SFA2) |> 
+  filter(!is.na(SFA)) |> 
+  ## select necessary data for this analysis
+  filter(Year == 2024) |> 
+  filter(!River.Name %in% c("Char Brook", "Burlington River", "Shinney's River", "Traverse Brook", "Shoal Harbour River, Trinity Bay", "Come By Chance River", "Conne River", "Lomond Main River", "Exploits River", "Stoney Brook"))
+
+water <- bind_rows(water1, water2)
+  
+
+# hobo <- hobo |> 
+#   mutate(Station2 = factor(paste(River.Number, ". ", Station, sep = ""))) |>
+#   mutate(Station2 = fct_reorder(Station2, River.Number)) |> 
+#   mutate(Time = with_tz(Time.UTC, tzone = "America/St_Johns")) |>  
+#   arrange(SFA, River.Number, Serial, Time) |> 
+#   mutate(Date = date(Time)) |> 
+#   mutate(WaterTemperature_C = replace(WaterTemperature_C, out.of.water !=0, NA))
+
+removes <- current.loggers |> 
+  filter(Recording == "Hobo Weather Station") |> 
+  filter(Station %in% c("BDL", "Goodyears Dam", "North East Placentia")) |> 
+  mutate(remove = "yes")
+
+partner.loggers <- partner.data |> 
+  distinct(Recording, Partner, Station, Serial, River, Lat, Long, SFA, River.Number) |> 
+  rename(Group = Partner,
+         River.Name = River)
+
+## loggers
+loggers <- current.loggers |> 
+  left_join(removes) |> 
+  filter(is.na(remove)) |> 
+  dplyr::select(-remove) |> 
+  bind_rows(partner.loggers) |> 
+  ## add Gray River and Grandy's River
+  add_row(Station = "Grey River", 
+          Lat = 47.689433,
+          Long = -57.001846,
+          Recording = "Water",
+          SFA = "11",
+          River.Number = 121,
+          River.Name = "Grey River",
+          Group = "CAFE") |> 
+  add_row(Station = "Grandys River", 
+          Lat = 47.689433,
+          Long = -57.001846,
+          Recording = "Water",
+          SFA = "12",
+          River.Number = 125,
+          River.Name = "Grandy's River",
+          Group = "CAFE") |> 
+  ## make sure group is correctly reflected
+  mutate(Group = replace(Group, is.na(Group) & River.Number == 61 & Logger.Type == "Tidbit", "FABEC"),
+         Group = replace(Group, is.na(Group) & River.Number == 60 & Logger.Type == "Tidbit", "FABEC"),
+         Group = replace(Group, is.na(Group) & River.Number == 59 & Logger.Type == "Tidbit", "FABEC"),
+         Group = replace(Group, is.na(Group) & River.Number == 62 & Logger.Type == "Tidbit", "FABEC")) |> 
+  mutate(Group = replace(Group, is.na(Group) & Serial %in% c(21417670, 21290092, 21042542, 21290104), "SAEN")) |>
+  mutate(Group = replace(Group, is.na(Group) & Recording == "Water" & River.Name == "Hunt River", "AROC")) |> 
+  mutate(Group = replace(Group, Recording == "Hobo Weather Station" & Serial %in% c(21560024, 21560027,	21931677, 21560020,	21560026, 21931676,21560019,21931680, 21931681, 21560023,	21368518), "C&P")) |> 
+  mutate(Group = replace(Group, Recording == "Level" & Station == "Shinneys River", "NCC")) |> 
+  ## all remaining are cafe
+  mutate(Group = replace(Group, is.na(Group), "CAFE")) |> 
+  ## remove bad data
+  filter(!Serial %in% c(86,46,48,123456)) |> 
+  dplyr::select(Station, Lat, Long, Recording, Serial, Logger.Type, SFA, River.Number, River.Name, Group) |> 
+  distinct() |> 
+  ## remove duplicates
+  filter(Station != "Indian Bay Brook") |> 
+  filter(Serial != 21436595)
+  
+  
+
+```
+
+```{r closure data, echo = FALSE, warning = FALSE, message= FALSE}
+real.closures <- read.csv("./data-working/Environmental Protocol Analysis 2020 to 2024 CDV 12-13-2024.csv") |> 
+  rename(SFA = Salmon.Fishing.Area) |> 
+  filter(Year == 2024) |>
+  dplyr::select(SFA, River.Number, Date.of.Closure, Re.open.Date) |> 
+  mutate(Date.of.Closure = ymd_h(paste(Date.of.Closure, 5)),
+         Re.open.Date = ymd_h(paste(Re.open.Date, 5)))
+```
+
+```{r map prep, echo = FALSE, warning = FALSE, message = FALSE}
+# ---- detailed map ----
+
+mapcanada <- gadm("canada", level = 1, path = ".", version = "latest")
+
+mapcan_sf <- st_as_sf(mapcanada)
+
+# b <- opq(bbox = c(-61.06, 46.71, -52.95, 55.62)) |>
+#   add_osm_features(features = list( "water" = "river",
+#                                     "water" = "stream")) |>
+#   osmdata_sf()
+
+
+```
+
+
+```{r basemap, echo = FALSE, warning = FALSE, message = FALSE}
+## only want the 2024 stations
+cols <- c("Water" = "blue",  "Level" = "purple", "Hobo Weather Station" = 'orange')
+basemap <- ggplot(mapcan_sf) +
+  geom_sf() +
+  # geom_sf(data = b$osm_multipolygons, aes()) +
+  xlim(-61.45, -52.7) +
+  ylim(46.7, 55.65) +
+  theme_bw()
+
+
+# ggsave("./output/map-figures/cellularstations.png", device = "png", height = 8, width = 8, units = "in")
+
+
+```
+
+## Overview
+The purpose of this report is to assess how river closures based on the Environmental protocol vary across different temperature thresholds. Currently, the environmental protocol states that after 3 consecutive days of water temperature > 20°C, rivers may be closed to angling, with catch and release angling allowed until 10 am each day. We evaluate the change river closures across three temperature thresholds: 20°C, 19°C, and 18°C. 
+
+
+```{r 20d threshold, echo = FALSE, message = FALSE, warning = FALSE}
+season24 <- water |> 
+  dplyr::select(Time, Station, Serial, Temp.C, Level.m, SFA, River.Number, River.Name, Recording, Date, Year) |> 
+  distinct() |> 
+  filter(Year == 2024) |> 
+  # filter(month(Time)>= 6) |>
+  filter(date(Time) >= as_date("2024-06-01") & date(Time) <= as_date("2024-09-07"))
+season23 <- water |> 
+  dplyr::select(Time, Station, Serial, Temp.C, Level.m, SFA, River.Number, River.Name, Recording, Date, Year) |> 
+  distinct() |> 
+  filter(Year == 2023) |> 
+  # filter(month(Time)>= 6) |>
+  filter(date(Time) >= as_date("2023-06-01") & date(Time) <= as_date("2023-09-07"))
+
+season20 <- bind_rows(season24, season23) |> 
+  group_by(Year, Time, River.Number, River.Name, SFA) |>
+  summarise(Temp.C = mean(Temp.C, na.rm = TRUE)) |>
+  ungroup() |> 
+  mutate(above20 = Temp.C >= 20) |>
+  # filter(River.Name == "Terra Nova River") |>
+  # group_by(Station, Serial, SFA, River.Number, River.Name) |>
+  group_by(Year, SFA, River.Number, River.Name) |>
+  arrange(River.Number, Time) |>
+  mutate(period = NA,
+         period = replace(period, above20 == lag(above20), 0),
+         period = replace(period, above20 != lag(above20), 1),
+         period = replace(period, is.na(period), 1),
+         period = cumsum(period)) |>
+  mutate(hoursdiff = difftime(lead(Time), Time, units = "hours"),
+         hoursdiff = as.numeric(str_remove(hoursdiff, "hours"))) |>
+  ungroup() |>
+  group_by(Year, SFA, River.Number, River.Name, period, above20) |>
+  # group_by(Station, Serial, SFA, River.Number, River.Name, period, above20) |>
+  mutate(hours = cumsum(hoursdiff)) |>
+  ungroup()
+
+# season20 <- water |>
+#   dplyr::select(Time, Station, Serial, Temp.C, Level.m, SFA, River.Number, River.Name, Recording, Date, Year) |>
+#   distinct() |>
+#   filter(Year == 2024) |>
+#   # filter(month(Time)>= 6) |>
+#   filter(date(Time) >= as_date("2024-06-01") & date(Time) <= as_date("2024-09-07")) |>
+#   group_by(Time, River.Number, River.Name, SFA) |>
+#   summarise(Temp.C = mean(Temp.C, na.rm = TRUE)) |>
+#   mutate(above20 = Temp.C >= 20) |>
+#   # filter(River.Name == "Terra Nova River") |>
+#   # group_by(Station, Serial, SFA, River.Number, River.Name) |>
+#   group_by(SFA, River.Number, River.Name) |>
+#   arrange(River.Number, Time) |>
+#   mutate(period = NA,
+#          period = replace(period, above20 == lag(above20), 0),
+#          period = replace(period, above20 != lag(above20), 1),
+#          period = replace(period, is.na(period), 1),
+#          period = cumsum(period)) |>
+#   mutate(hoursdiff = difftime(lead(Time), Time, units = "hours"),
+#          hoursdiff = as.numeric(str_remove(hoursdiff, "hours"))) |>
+#   ungroup() |>
+#   group_by(SFA, River.Number, River.Name, period, above20) |>
+#   # group_by(Station, Serial, SFA, River.Number, River.Name, period, above20) |>
+#   mutate(hours = cumsum(hoursdiff)) |>
+#   ungroup()
+
+closures20 <- season20 |> 
+  filter(above20 == TRUE) |> 
+  filter(hours >= 72) |> 
+  # group_by(Station, Serial, SFA, River.Number, River.Name, period) |> 
+  group_by(Year, SFA, River.Number, River.Name, period) |>
+  summarise(days.closed = (max(hours)-72)/24,
+            start = min(Time),
+            stop = max(Time),
+            Avg.Temp = mean(Temp.C),
+            SD.Temp = sd(Temp.C)) |> 
+  ungroup()
+
+closure.summary20 <- closures20 |> 
+  ## number of closures and total closure days
+  group_by(Year, SFA, River.Number, River.Name) |> 
+  summarise(num.closures = n(),
+            total.days = sum(days.closed),
+            Average.Temp = mean(Avg.Temp)) |> 
+  ungroup()
+
+
+```
+
+```{r 19d threshold, echo = FALSE, message = FALSE, warning = FALSE}
+
+
+season19 <-bind_rows(season24, season23) |> 
+  group_by(Year, Time, River.Number, River.Name, SFA) |> 
+  summarise(Temp.C = mean(Temp.C, na.rm = TRUE)) |> 
+  ungroup() |> 
+  mutate(above19 = Temp.C >= 19) |> 
+  # filter(River.Name == "Terra Nova River") |>
+  # group_by(Station, Serial, SFA, River.Number, River.Name) |> 
+  group_by(Year, SFA, River.Number, River.Name) |> 
+  arrange(River.Number, Time) |> 
+  mutate(period = NA,
+         period = replace(period, above19 == lag(above19), 0),
+         period = replace(period, above19 != lag(above19), 1),
+         period = replace(period, is.na(period), 1),
+         period = cumsum(period)) |> 
+  mutate(hoursdiff = difftime(lead(Time), Time, units = "hours"),
+         hoursdiff = as.numeric(str_remove(hoursdiff, "hours"))) |> 
+  ungroup() |> 
+  group_by(Year, SFA, River.Number, River.Name, period, above19) |> 
+  mutate(hours = cumsum(hoursdiff)) |>
+  ungroup() 
+
+closures19 <- season19 |> 
+  filter(above19 == TRUE) |> 
+  filter(hours >= 72) |> 
+  # group_by(Station, Serial, SFA, River.Number, River.Name, period) |> 
+  group_by(Year, SFA, River.Number, River.Name, period) |>
+  summarise(days.closed = (max(hours)-72)/24,
+            start = min(Time),
+            stop = max(Time),
+            Avg.Temp = mean(Temp.C),
+            SD.Temp = sd(Temp.C)) |> 
+  ungroup()
+
+closure.summary19 <- closures19 |> 
+  ## number of closures and total closure days
+  group_by(Year, SFA, River.Number, River.Name) |> 
+  summarise(num.closures = n(),
+            total.days = sum(days.closed),
+            Average.Temp = mean(Avg.Temp)) |> 
+  ungroup()
+
+
+```
+
+```{r 18d threshold, echo = FALSE, message = FALSE, warning = FALSE}
+
+
+season18 <- bind_rows(season24, season23) |> 
+  group_by(Year, Time, River.Number, River.Name, SFA) |> 
+  summarise(Temp.C = mean(Temp.C, na.rm = TRUE)) |> 
+  ungroup() |> 
+  mutate(above18 = Temp.C >= 18) |> 
+  # filter(River.Name == "Terra Nova River") |>
+  # group_by(Station, Serial, SFA, River.Number, River.Name) |> 
+  group_by(Year, SFA, River.Number, River.Name) |> 
+  arrange(River.Number, Time) |> 
+  mutate(period = NA,
+         period = replace(period, above18 == lag(above18), 0),
+         period = replace(period, above18 != lag(above18), 1),
+         period = replace(period, is.na(period), 1),
+         period = cumsum(period)) |> 
+  mutate(hoursdiff = difftime(lead(Time), Time, units = "hours"),
+         hoursdiff = as.numeric(str_remove(hoursdiff, "hours"))) |> 
+  ungroup() |> 
+  group_by(Year, SFA, River.Number, River.Name, period, above18) |> 
+  mutate(hours = cumsum(hoursdiff)) |>
+  ungroup() 
+
+closures18 <- season18 |> 
+  filter(above18 == TRUE) |> 
+  filter(hours >= 72) |> 
+  # group_by(Station, Serial, SFA, River.Number, River.Name, period) |> 
+  group_by(Year, SFA, River.Number, River.Name, period) |>
+  summarise(days.closed = (max(hours)-72)/24,
+            start = min(Time),
+            stop = max(Time),
+            Avg.Temp = mean(Temp.C),
+            SD.Temp = sd(Temp.C)) |> 
+  ungroup()
+
+closure.summary18 <- closures18 |> 
+  ## number of closures and total closure days
+  group_by(Year, SFA, River.Number, River.Name) |> 
+  summarise(num.closures = n(),
+            total.days = sum(days.closed),
+            Average.Temp = mean(Avg.Temp)) |> 
+  ungroup()
+
+
+```
+
+## Available data
+In 2023, we have data available from `r season23 |> distinct(Serial) |> count()` cellular stations and loggers across `r season23 |> distinct(River.Name) |> count()` rivers, and in 2024, we have data available from `r season24 |> distinct(Serial) |> count()` cellular stations and loggers across `r season24 |> distinct(River.Name) |> count()` rivers (Appendix 1) from Science, C&P, and partner groups (Fig. 1). C&P loggers have not been included at this time, as the data has not been processed yet. In cases where there are multiple loggers per river, hourly temperature is an average across the loggers. In order to limit underestimating closure effects, we only use rivers with data for the entire salmon season (June 1 - Sept 7). 
+
+```{r full map, echo = FALSE, warning = FALSE, message = FALSE}
+cols <- c("Water" = "blue",  "Level" = "purple", "Hobo Weather Station" = 'orange')
+
+loggers2 <- loggers |> 
+  filter(Serial %in% water$Serial) |> 
+  mutate(Group = replace(Group, Recording == "Hobo Weather Station" & Group == "CAFE", "Hobo Weather Station - Science"),
+         Group = replace(Group, Recording == "Hobo Weather Station" & Group == "C&P", "Hobo Weather Station - C&P")) |> 
+  mutate(Group = replace(Group, Group == "CAFE", "Science")) |> 
+  mutate(Group = replace(Group, Group %in% c("SAEN", "AROC", "FABEC", "NCC", "GR"), "Partners"))
+
+fullmap <- basemap +
+  # geom_point(data = loggers2,
+  #            aes(x = Long, y = Lat, shape = Group, fill = Group)) +
+  geom_point(data = loggers2 |> filter(Group == "Partners"),
+             aes(x = Long, y = Lat, shape = "Partners", fill = "Partners"), size = 2.5) +
+  # geom_point(data = loggers2 |> filter(Group == "C&P"),
+  #            aes(x = Long, y = Lat, shape = "C&P", fill = "C&P"), size = 2.5) +
+  geom_point(data = loggers2 |> filter(Group == "Science"),
+             aes(x = Long, y = Lat, shape = "Science", fill = "Science"), size = 2.5) +
+  geom_point(data = loggers2 |> filter(Group == "Hobo Weather Station - C&P"),
+             aes(x = Long, y = Lat, shape = "Hobo Weather Station - C&P", fill = "Hobo Weather Station - C&P"), size = 2.5) +
+  geom_point(data = loggers2 |> filter(Group == "Hobo Weather Station - Science"),
+             aes(x = Long, y = Lat, shape = "Hobo Weather Station - Science", fill = "Hobo Weather Station - Science"), size = 2.5) +
+  scale_fill_manual(name = "Loggers",
+                     labels = c("Hobo Weather Station - Science", "Hobo Weather Station - C&P", "Science", 
+                                # "C&P", 
+                                "Partners"),
+                    breaks = c("Hobo Weather Station - Science", "Hobo Weather Station - C&P", "Science", 
+                               # "C&P", 
+                               "Partners"),
+                     values = c("Hobo Weather Station - Science" = 'orange',
+                                "Hobo Weather Station - C&P" = 'orange',
+                                "Science" = 'blue',
+                                # "C&P" = 'purple',
+                                "Partners" = 'darkgreen')) +
+  scale_shape_manual(name = "Loggers",
+                     labels = c("Hobo Weather Station - Science", "Hobo Weather Station - C&P", "Science", 
+                                # "C&P", 
+                                "Partners"),
+                     breaks = c("Hobo Weather Station - Science", "Hobo Weather Station - C&P", "Science",
+                                # "C&P", 
+                                "Partners"),
+                     values = c("Hobo Weather Station - Science" = 22,
+                                "Hobo Weather Station - C&P" = 25,
+                                "Science" = 21,
+                                # "C&P" = 21,
+                                "Partners" = 21)) +
+  guides(fill = guide_legend(override.aes = list(shape = c(22,25,21,
+                                                           # 21,
+                                                           21))),
+         shape = guide_legend(override.aes = list(fill = c('orange', 'orange', 'blue', 
+                                                           # 'purple', 
+                                                           'darkgreen'))))
+
+# nfld <- fullmap + 
+#   xlim(-60, -52.7) +
+#   ylim(46.7, 52)
+# 
+# lab <- fullmap +
+#   xlim(-61.45, -55.7) +
+#   ylim(51.5, 55.65)
+  
+fullmap
+```
+
+Figure 1. Loggers used to evaluate river closures for 2024 at various temperatures (20, 19, and 18 °C). Orange squares (Science) and orange upside down triangles (C&P) represent cellular station data, and blue circles represent Science loggers and green circles represents partner loggers. 
+
+
+
+## Results
+
+
+```{r summary, echo = FALSE, message = FALSE, warning = FALSE}
+sum18 <- closure.summary18 |> 
+  group_by(Year) |> 
+  summarise(Env.Protocol.Temp = 18,
+            Num.Rivers.Closed = n(),
+            Total.Closures = sum(num.closures),
+            Max.Days.Closed = max(total.days),
+            Average.Days.Closed = mean(total.days),
+            Average.Temp.During.Closure = mean(Average.Temp),
+            SD.Temp = sd(Average.Temp)) |> 
+  ungroup()
+
+sum19 <- closure.summary19 |> 
+  group_by(Year) |> 
+  summarise(Env.Protocol.Temp = 19,
+            Num.Rivers.Closed = n(),
+            Total.Closures = sum(num.closures),
+            Max.Days.Closed = max(total.days),
+            Average.Days.Closed = mean(total.days),
+            Average.Temp.During.Closure = mean(Average.Temp),
+            SD.Temp = sd(Average.Temp)) |> 
+  ungroup()
+
+sum20 <- closure.summary20 |> 
+  group_by(Year) |> 
+  summarise(Env.Protocol.Temp = 20,
+            Num.Rivers.Closed = n(),
+            Total.Closures = sum(num.closures),
+            Max.Days.Closed = max(total.days),
+            Average.Days.Closed = mean(total.days),
+            Average.Temp.During.Closure = mean(Average.Temp),
+            SD.Temp = sd(Average.Temp)) |> 
+  ungroup()
+
+overall2023 <- bind_rows(sum20, sum19, sum18) |> 
+  filter(Year == 2023) |> 
+  mutate(Num.Rivers.Assessed = 29) |> 
+  mutate(Max.Days.Closed = ceiling(Max.Days.Closed),
+         Avg.Days.Closed = round(Average.Days.Closed, 1),
+         Avg.Temp.During.Closure = round(Average.Temp.During.Closure,1),
+         SD.Temp = round(SD.Temp,1)) |> 
+    mutate(Avg.Temp.During.Closure = paste(Avg.Temp.During.Closure, "±", SD.Temp)) |> 
+  dplyr::select(Env.Protocol.Temp, Num.Rivers.Assessed, Num.Rivers.Closed, Total.Closures, Max.Days.Closed, Avg.Days.Closed, Avg.Temp.During.Closure)
+
+overall2024 <- bind_rows(sum20, sum19, sum18) |> 
+  filter(Year == 2024) |> 
+  mutate(Num.Rivers.Assessed = 30) |> 
+  mutate(Max.Days.Closed = ceiling(Max.Days.Closed),
+         Avg.Days.Closed = round(Average.Days.Closed, 1),
+         Avg.Temp.During.Closure = round(Average.Temp.During.Closure,1),
+         SD.Temp = round(SD.Temp,1))|> 
+  mutate(Avg.Temp.During.Closure = paste(Avg.Temp.During.Closure, "±", SD.Temp)) |> 
+  dplyr::select(Env.Protocol.Temp, Num.Rivers.Assessed, Num.Rivers.Closed, Total.Closures, Max.Days.Closed, Avg.Days.Closed, Avg.Temp.During.Closure)
+
+kable(overall2023, caption = "Table 1. Number of rivers evaluated for 2023 to determine the effect of enviornmental protocol temperatures on number of rivers closed, total closures, maximum clousre time, average closure time, and average temperature during closure ± standard deviation.")
+kable(overall2024,caption = "Table 1. Number of rivers evaluated for 2024 to determine the effect of enviornmental protocol temperatures on number of rivers closed, total closures, maximum clousre time, average closure time, and average temperature during closure ± standard deviation.")
+
+```
+
+### Figures
+Hourly water temperature for rivers with available data for 2023 and 2024. Dashed line represents the environmental protocol temperature, organge lines represent the monitoring period prior to a closure when water temperature is above the designated threshold, and red represents the period in which a river would be closed. Grey shading in 2024 represents periods when rivers were officially closed.
+
+```{r test plots, echo = FALSE, message = FALSE, warning = FALSE, eval = FALSE}
+
+p1 <- season20 |> 
+  left_join(closures20 |> mutate(status = 'closed')) |>
+  mutate(status = replace(status, is.na(status), "open")) |> 
+  left_join(real.closures, relationship = "many-to-many") |> 
+  filter(River.Name == "Terra Nova River") |> 
+  ggplot() +
+  geom_rect(aes(xmin = Date.of.Closure, xmax = Re.open.Date, ymin = -Inf, ymax = Inf), alpha = 0.2, fill = 'lightgrey') +
+  geom_line(aes(x = Time, y = Temp.C, color = status)) +
+  geom_hline(yintercept = 20, linetype = 'dashed') +
+  theme_bw() +
+  scale_color_manual(breaks = c("open", "closed"),
+                     values = c('black', 'red')) +
+  labs(x = "Date",
+       y = "Temperature (°C)",
+       color = "Temperature-based river status",
+       title = "Terra Nova River at 20°C threshold") +
+  theme(legend.position = "bottom")
+
+p2 <- season19 |> 
+  left_join(closures19 |> mutate(status = 'closed')) |>
+  mutate(status = replace(status, is.na(status), "open")) |> 
+  left_join(real.closures, relationship = "many-to-many") |> 
+  filter(River.Name == "Terra Nova River") |> 
+  ggplot() +
+   geom_rect(aes(xmin = Date.of.Closure, xmax = Re.open.Date, ymin = -Inf, ymax = Inf), alpha = 0.2, fill = 'lightgrey') +
+  geom_line(aes(x = Time, y = Temp.C, color = status)) +
+  geom_hline(yintercept = 19, linetype = 'dashed') +
+  theme_bw() +
+  scale_color_manual(breaks = c("open", "closed"),
+                     values = c('black', 'red')) +
+  labs(x = "Date",
+       y = "Temperature (°C)",
+       color = "Temperature-based river status",
+       title = "Terra Nova River at 19°C threshold") +
+  theme(legend.position = "bottom")
+
+p3 <- season18 |> 
+  left_join(closures18 |> mutate(status = 'closed')) |>
+  mutate(status = replace(status, is.na(status), "open")) |> 
+  left_join(real.closures, relationship = "many-to-many") |> 
+  filter(River.Name == "Terra Nova River") |> 
+  ggplot() +
+   geom_rect(aes(xmin = Date.of.Closure, xmax = Re.open.Date, ymin = -Inf, ymax = Inf), alpha = 0.2, fill = 'lightgrey') +
+  geom_line(aes(x = Time, y = Temp.C, color = status)) +
+  geom_hline(yintercept = 18, linetype = 'dashed') +
+  theme_bw() +
+  scale_color_manual(breaks = c("open", "closed"),
+                     values = c('black', 'red')) +
+  labs(x = "Date",
+       y = "Temperature (°C)",
+       color = "Temperature-based river status",
+       title = "Terra Nova River at 18°C threshold") +
+  theme(legend.position = "bottom")
+
+p1
+p2
+p3
+
+```
+
+```{r all plots, echo = FALSE, message = FALSE, warning = FALSE}
+
+df20 <- season20 |> 
+  left_join(closures20 |> mutate(status = 'closed'),
+            join_by(Year, River.Name, SFA, River.Number, period)) |>
+  mutate(status = replace(status, Time < start, "monitored")) |> 
+  mutate(status = replace(status, is.na(status), "open")) |> 
+  left_join(real.closures |> mutate(Year = 2024), join_by(Year, SFA, River.Number), relationship = "many-to-many")
+
+df19 <- season19 |> 
+  left_join(closures19 |> mutate(status = 'closed'),
+            join_by(Year, River.Name, SFA, River.Number, period)) |>
+  mutate(status = replace(status, Time < start, "monitored")) |> 
+  mutate(status = replace(status, is.na(status), "open")) |> 
+  left_join(real.closures |> mutate(Year = 2024), join_by(Year, SFA, River.Number), relationship = "many-to-many")
+
+df18 <- season18 |> 
+  left_join(closures18 |> mutate(status = 'closed'),
+            join_by(Year, River.Name, SFA, River.Number, period)) |>
+  mutate(status = replace(status, Time < start, "monitored")) |> 
+  mutate(status = replace(status, is.na(status), "open")) |> 
+  left_join(real.closures |> mutate(Year = 2024), join_by(Year, SFA, River.Number), relationship = "many-to-many")
+
+rivers <- unique(season20$River.Number)
+
+for (i in seq_along(rivers)) {
+  
+ p1 <- df20  |> 
+  filter(River.Number == rivers[i]) |> 
+  ggplot() +
+  geom_rect(aes(xmin = Date.of.Closure, xmax = Re.open.Date, ymin = -Inf, ymax = Inf), alpha = 0.2, fill = 'lightgrey') +
+   geom_line(aes(x = Time, y = Temp.C, color = "open")) +
+   geom_line(data = df20 |> filter(River.Number == rivers[i]) |> filter(status == "closed"),
+             aes(x = Time, y = Temp.C, group = period, color = "closed")) +
+   geom_line(data = df20 |> filter(River.Number == rivers[i]) |> filter(status == "monitored"),
+             aes(x = Time, y = Temp.C, group = period, color = "monitored")) +
+  geom_hline(yintercept = 20, linetype = 'dashed') +
+  theme_bw() +
+  scale_color_manual(name = "Temperature-based river status",
+                     labels = c("open", "monitored", "closed"),
+                     breaks = c("open", "monitored", "closed"),
+                     values = c('black', 'darkorange', 'red')) +
+  labs(x = "Date",
+       y = "Temperature (°C)",
+       title = paste(season20$River.Name[season20$River.Number == rivers[i]], "at 20°C threshold")) +
+  theme(legend.position = "bottom") + facet_wrap(~Year, scales = "free_x")
+
+p2 <- df19  |> 
+  filter(River.Number == rivers[i]) |> 
+  ggplot() +
+   geom_rect(aes(xmin = Date.of.Closure, xmax = Re.open.Date, ymin = -Inf, ymax = Inf), alpha = 0.2, fill = 'lightgrey') +
+  geom_line(aes(x = Time, y = Temp.C, color = "open")) +
+   geom_line(data = df19 |> filter(River.Number == rivers[i]) |> filter(status == "closed"),
+             aes(x = Time, y = Temp.C, group = period, color = "closed")) +
+  geom_line(data = df19 |> filter(River.Number == rivers[i]) |> filter(status == "monitored"),
+             aes(x = Time, y = Temp.C, group = period, color = "monitored")) +
+  geom_hline(yintercept = 19, linetype = 'dashed') +
+  theme_bw() +
+    scale_color_manual(name = "Temperature-based river status",
+                     labels = c("open", "monitored", "closed"),
+                     breaks = c("open", "monitored", "closed"),
+                     values = c('black', 'darkorange', 'red')) +
+  labs(x = "Date",
+       y = "Temperature (°C)",
+      title = paste(season19$River.Name[season19$River.Number == rivers[i]], "at 19°C threshold")) +
+  theme(legend.position = "bottom") +
+  facet_wrap(~Year, scales = "free_x")
+
+p3 <- df18  |> 
+  filter(River.Number == rivers[i]) |> 
+  ggplot() +
+   geom_rect(aes(xmin = Date.of.Closure, xmax = Re.open.Date, ymin = -Inf, ymax = Inf), alpha = 0.2, fill = 'lightgrey') +
+ geom_line(aes(x = Time, y = Temp.C, color = "open")) +
+   geom_line(data = df18 |> filter(River.Number == rivers[i]) |> filter(status == "closed"),
+             aes(x = Time, y = Temp.C, group = period, color = "closed")) +
+  geom_line(data = df18 |> filter(River.Number == rivers[i]) |> filter(status == "monitored"),
+             aes(x = Time, y = Temp.C, group = period, color = "monitored")) +
+  geom_hline(yintercept = 18, linetype = 'dashed') +
+  theme_bw() +
+  scale_color_manual(name = "Temperature-based river status",
+                     labels = c("open", "monitored", "closed"),
+                     breaks = c("open", "monitored", "closed"),
+                     values = c('black', 'darkorange', 'red')) +
+  labs(x = "Date",
+       y = "Temperature (°C)",
+       title = paste(season18$River.Name[season18$River.Number == rivers[i]], "at 18°C threshold")) +
+  theme(legend.position = "bottom") +
+  facet_wrap(~Year, scales = "free_x")
+
+print(p1)
+print(p2)
+print(p3)
+cat('\n\n')
+  
+}
+
+```
+
+### Appendix
+```{r rivers, echo = FALSE, warning= FALSE, message = FALSE}
+
+table1 <- water |> 
+  distinct(Year, River.Name, SFA, River.Number, Serial) |> 
+  group_by(Year, SFA, River.Number, River.Name) |>
+  summarise(Loggers = n()) |> 
+  ungroup() |> 
+  arrange(SFA, River.Number) |> 
+  mutate(River.Number = replace(River.Number, River.Name == "Char Brook", ""))
+  
+kable(table1) 
+```

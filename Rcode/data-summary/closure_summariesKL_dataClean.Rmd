@@ -1,0 +1,609 @@
+---
+title: "River Closures at different temperature thresholds"
+date: "`r Sys.Date()`"
+authors: Emilie Geissinger, Curtis Pennell, Brianna Newton, Chelsea Bloom, and Keith Lewis
+affiliation: Coastal and Freshwater Ecology
+output:
+   html_document: 
+      toc: true
+      toc_float: true
+      toc_collapsed: true
+      toc_depth: 3
+      number_sections: true
+      theme: lumen
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = 'C:/Users/lewiske/Documents/CAFE/projects/temperature/river_closures')
+options(knitr.kable.NA = '')
+
+library(tidyverse)
+library(lubridate)
+library(knitr)
+library(ggpubr)
+library(osmdata)
+library(sf)
+library(geodata)
+library(kableExtra)
+```
+
+
+```{r loggers, echo = FALSE, warning = FALSE, message= FALSE}
+#source("Rcode/data-summary/environmental-protocol-data.R")
+source("closure_summaries.R")
+
+```
+
+# SFA's and rivers
+```{r rivers lookup, echo = FALSE, warning = FALSE, message= FALSE}
+
+kbl(df20  |> select(SFA, River.Number, River.Name, Time) |>
+   group_by(River.Name) |>
+   slice(which.min(Time)) |>
+   arrange(River.Number) |>
+   select(-Time)|>
+   rowid_to_column(), 
+   align = 'llll') |>
+   column_spec(1, width = "10mm") |>
+   column_spec(2, width = "10mm") |>
+   column_spec(3, width = "30mm") |>
+   column_spec(4, width = "60mm")
+```
+
+
+
+# SFA 1-3
+
+```{r figs SFA 1-3, message = FALSE, echo = FALSE, warning = FALSE}
+for (i in seq_along(river_name[1:6])) {
+p1 <- ggplot() +
+   geom_line(data = df20 |> filter(River.Name == river_name[i]), aes(x = Time, y = Temp.C, color = "open")) +
+   {if(nrow(df20 |> filter(River.Name == river_name[i] & status == "closed")) > 0){
+      geom_line(data = df20 |> filter(River.Name == river_name[i] & status == "closed"), 
+                aes(x = Time, y = Temp.C, group = period, color = "closed"))   
+   }} +
+   {if(nrow(df20 |> filter(River.Name == river_name[i] & status == "monitored")) > 0){
+      geom_line(data = df20 |> filter(River.Name == river_name[i] & status == "monitored"), 
+                aes(x = Time, y = Temp.C, group = period, color = "monitored"))
+   }} +
+   {if(nrow(water_lev |> filter(River.Name == river_name[i])) > 1){
+      geom_line(data = water_lev |> filter(River.Name == river_name[i] & !is.na(new)), aes(x = Time, y = new), colour = 'blue') 
+   }} +
+   geom_hline(yintercept = 20, linetype = 'dashed') +
+   geom_hline(yintercept = 19, linetype = 'dotdash') +
+   geom_hline(yintercept = 18, linetype = 'dotted') +
+   {if(!is.na(df_stat_all[df_stat_all$River.Name == river_name[i], "mon19_24"])){
+      geom_vline(xintercept = df_stat_all[df_stat_all$River.Name == river_name[i], "mon19_24"], linetype = 'dotdash')      
+   }} +
+   {if(!is.na(df_stat_all[df_stat_all$River.Name == river_name[i], "mon18_24"])){
+      geom_vline(xintercept = df_stat_all[df_stat_all$River.Name == river_name[i], "mon18_24"], linetype = 'dotted')
+   }} +
+   {if(!is.na(df_stat_all[df_stat_all$River.Name == river_name[i], "close19_24"])){
+      geom_vline(xintercept = df_stat_all[df_stat_all$River.Name == river_name[i], "close19_24"], linetype = 'dotdash')
+   }} +
+   {if(!is.na(df_stat_all[df_stat_all$River.Name == river_name[i], "close18_24"])){
+      geom_vline(xintercept = df_stat_all[df_stat_all$River.Name == river_name[i], "close18_24"], linetype = 'dotted')
+   }} +
+   {if(!is.na(df_stat_all[df_stat_all$River.Name == river_name[i], "mon19_23"])){
+      geom_vline(xintercept = df_stat_all[df_stat_all$River.Name == river_name[i], "mon19_23"], linetype = 'dotdash')      
+   }} +
+   {if(!is.na(df_stat_all[df_stat_all$River.Name == river_name[i], "mon18_23"])){
+      geom_vline(xintercept = df_stat_all[df_stat_all$River.Name == river_name[i], "mon18_23"], linetype = 'dotted')
+   }} +
+   {if(!is.na(df_stat_all[df_stat_all$River.Name == river_name[i], "close19_23"])){
+      geom_vline(xintercept = df_stat_all[df_stat_all$River.Name == river_name[i], "close19_23"], linetype = 'dotdash')
+   }} +
+   {if(!is.na(df_stat_all[df_stat_all$River.Name == river_name[i], "close18_23"])){
+      geom_vline(xintercept = df_stat_all[df_stat_all$River.Name == river_name[i], "close18_23"], linetype = 'dotted')
+   }} +
+   theme_bw(base_size = 12) +
+   {if(!is.na(df20_23_range[df20_23_range$River.Name == river_name[i], "Date.of.Closure"])) {
+      geom_rect(data = df20_23_range |> filter(River.Name == river_name[i]), 
+                aes(xmin = min(Date.of.Closure), xmax = max(Re.open.Date), ymin = -Inf, ymax = Inf), alpha = 0.3, fill = 'darkgrey')    
+   }} +
+   {if(!is.na(df20_24_range[df20_24_range$River.Name == river_name[i], "Date.of.Closure"])) {
+      geom_rect(data = df20_24_range |> filter(River.Name == river_name[i]), 
+                aes(xmin = min(Date.of.Closure), xmax = max(Re.open.Date), ymin = -Inf, ymax = Inf), alpha = 0.3, fill = 'darkgrey')    
+   }} +
+   
+   scale_color_manual(name = "Temperature-based river status",
+                      labels = c("open", "monitored", "closed"),
+                      breaks = c("open", "monitored", "closed"),
+                      values = c('black', 'darkorange', 'red')) +
+   labs(x = "Date",
+        #y = "Temperature (°C)",
+        title = paste0(
+           river_name[i],
+           ", SFA = ", 
+          df20$SFA[df20$River.Name == river_name[i]][1],
+          ", River # = ", 
+          df20$River.Number[df20$River.Name == river_name[i]][1]
+           )) +
+   scale_y_continuous(name = "Water Temperature (°C)",
+                      sec.axis = sec_axis(trans= ~./15, 
+                                          name = "Water Level (meters)"), 
+                      limits = c(10, 33)) + # /10 to reduce the axis
+   scale_x_datetime(date_breaks = "1 month", date_labels = "%b") +
+   theme(legend.position = "bottom") + 
+   facet_wrap(~Year, scales = "free_x")
+   
+   
+print(p1)      
+#print(plotly::ggplotly(p1))
+}
+```
+
+Note:  
+- For Char Brook in 2023, data are from start to 2023-07-18 (Pendant) and from 2023-08-25 to end (Partner; AROC)  
+- 
+
+
+# SFA 4
+```{r figs SFA 4, message = FALSE, echo = FALSE, warning = FALSE}
+
+river_name1 <- river_name[7:17] # set river names for SFA(s)
+
+for (i in seq_along(river_name1)) {
+p2 <- ggplot() +
+   geom_line(data = df20 |> filter(River.Name == river_name1[i]), aes(x = Time, y = Temp.C, color = "open")) +
+   {if(nrow(df20 |> filter(River.Name == river_name1[i] & status == "closed")) > 0){
+      geom_line(data = df20 |> filter(River.Name == river_name1[i] & status == "closed"), 
+                aes(x = Time, y = Temp.C, group = period, color = "closed"))   
+   }} +
+   {if(nrow(df20 |> filter(River.Name == river_name1[i] & status == "monitored")) > 0){
+      geom_line(data = df20 |> filter(River.Name == river_name1[i] & status == "monitored"), 
+                aes(x = Time, y = Temp.C, group = period, color = "monitored"))
+   }} +
+   {if(nrow(water_lev |> filter(River.Name == river_name1[i])) > 1){
+      geom_line(data = water_lev |> filter(River.Name == river_name1[i] & !is.na(new)), aes(x = Time, y = new), colour = 'blue') 
+   }} +
+   geom_hline(yintercept = 20, linetype = 'dashed') +
+   geom_hline(yintercept = 19, linetype = 'dotdash') +
+   geom_hline(yintercept = 18, linetype = 'dotted') +
+   {if(!is.na(df_stat_all[df_stat_all$River.Name == river_name1[i], "mon19_24"])){
+      geom_vline(xintercept = df_stat_all[df_stat_all$River.Name == river_name1[i], "mon19_24"], linetype = 'dotdash')      
+   }} +
+   {if(!is.na(df_stat_all[df_stat_all$River.Name == river_name1[i], "mon18_24"])){
+      geom_vline(xintercept = df_stat_all[df_stat_all$River.Name == river_name1[i], "mon18_24"], linetype = 'dotted')
+   }} +
+   {if(!is.na(df_stat_all[df_stat_all$River.Name == river_name1[i], "close19_24"])){
+      geom_vline(xintercept = df_stat_all[df_stat_all$River.Name == river_name1[i], "close19_24"], linetype = 'dotdash')
+   }} +
+   {if(!is.na(df_stat_all[df_stat_all$River.Name == river_name1[i], "close18_24"])){
+      geom_vline(xintercept = df_stat_all[df_stat_all$River.Name == river_name1[i], "close18_24"], linetype = 'dotted')
+   }} +
+   {if(!is.na(df_stat_all[df_stat_all$River.Name == river_name1[i], "mon19_23"])){
+      geom_vline(xintercept = df_stat_all[df_stat_all$River.Name == river_name1[i], "mon19_23"], linetype = 'dotdash')      
+   }} +
+   {if(!is.na(df_stat_all[df_stat_all$River.Name == river_name1[i], "mon18_23"])){
+      geom_vline(xintercept = df_stat_all[df_stat_all$River.Name == river_name1[i], "mon18_23"], linetype = 'dotted')
+   }} +
+   {if(!is.na(df_stat_all[df_stat_all$River.Name == river_name1[i], "close19_23"])){
+      geom_vline(xintercept = df_stat_all[df_stat_all$River.Name == river_name1[i], "close19_23"], linetype = 'dotdash')
+   }} +
+   {if(!is.na(df_stat_all[df_stat_all$River.Name == river_name1[i], "close18_23"])){
+      geom_vline(xintercept = df_stat_all[df_stat_all$River.Name == river_name1[i], "close18_23"], linetype = 'dotted')
+   }} +
+   theme_bw(base_size = 12) +
+   {if(!is.na(df20_23_range[df20_23_range$River.Name == river_name1[i], "Date.of.Closure"])) {
+      geom_rect(data = df20_23_range |> filter(River.Name == river_name1[i]), 
+                aes(xmin = min(Date.of.Closure), xmax = max(Re.open.Date), ymin = -Inf, ymax = Inf), alpha = 0.3, fill = 'darkgrey')    
+   }} +
+   {if(!is.na(df20_24_range[df20_24_range$River.Name == river_name1[i], "Date.of.Closure"])) {
+      geom_rect(data = df20_24_range |> filter(River.Name == river_name1[i]), 
+                aes(xmin = min(Date.of.Closure), xmax = max(Re.open.Date), ymin = -Inf, ymax = Inf), alpha = 0.3, fill = 'darkgrey')    
+   }} +
+   
+   scale_color_manual(name = "Temperature-based river status",
+                      labels = c("open", "monitored", "closed"),
+                      breaks = c("open", "monitored", "closed"),
+                      values = c('black', 'darkorange', 'red')) +
+   labs(x = "Date",
+        #y = "Temperature (°C)",
+        title = paste0(
+           river_name1[i],
+           ", SFA = ", 
+          df20$SFA[df20$River.Name == river_name1[i]][1],
+          ", River # = ", 
+          df20$River.Number[df20$River.Name == river_name1[i]][1]
+           )) +
+   scale_y_continuous(name = "Water Temperature (°C)",
+                      sec.axis = sec_axis(trans= ~./15, 
+                                          name = "Water Level (meters)"), 
+                      limits = c(10, 33)) + # /10 to reduce the axis
+   scale_x_datetime(date_breaks = "1 month", date_labels = "%b") +
+   theme(legend.position = "bottom") + 
+   facet_wrap(~Year, scales = "free_x")
+   
+   
+print(p2)      
+}
+```
+
+### Notes:
+- Exploits took data every 10 minutes; 2024 cellular loggers were out of water
+
+# SFA 5-9
+
+```{r figs SFA 5-9, message = FALSE, echo = FALSE, warning = FALSE}
+
+river_name2 <- river_name[18:28]# set river names for SFA(s)
+
+for (i in seq_along(river_name2)) {
+p3 <- ggplot() +
+   geom_line(data = df20 |> filter(River.Name == river_name2[i]), aes(x = Time, y = Temp.C, color = "open")) +
+   {if(nrow(df20 |> filter(River.Name == river_name2[i] & status == "closed")) > 0){
+      geom_line(data = df20 |> filter(River.Name == river_name2[i] & status == "closed"), 
+                aes(x = Time, y = Temp.C, group = period, color = "closed"))   
+   }} +
+   {if(nrow(df20 |> filter(River.Name == river_name2[i] & status == "monitored")) > 0){
+      geom_line(data = df20 |> filter(River.Name == river_name2[i] & status == "monitored"), 
+                aes(x = Time, y = Temp.C, group = period, color = "monitored"))
+   }} +
+   {if(nrow(water_lev |> filter(River.Name == river_name2[i])) > 1){
+      geom_line(data = water_lev |> filter(River.Name == river_name2[i] & !is.na(new)), aes(x = Time, y = new), colour = 'blue') 
+   }} +
+   geom_hline(yintercept = 20, linetype = 'dashed') +
+   geom_hline(yintercept = 19, linetype = 'dotdash') +
+   geom_hline(yintercept = 18, linetype = 'dotted') +
+   {if(!is.na(df_stat_all[df_stat_all$River.Name == river_name2[i], "mon19_24"])){
+      geom_vline(xintercept = df_stat_all[df_stat_all$River.Name == river_name2[i], "mon19_24"], linetype = 'dotdash')      
+   }} +
+   {if(!is.na(df_stat_all[df_stat_all$River.Name == river_name2[i], "mon18_24"])){
+      geom_vline(xintercept = df_stat_all[df_stat_all$River.Name == river_name2[i], "mon18_24"], linetype = 'dotted')
+   }} +
+   {if(!is.na(df_stat_all[df_stat_all$River.Name == river_name2[i], "close19_24"])){
+      geom_vline(xintercept = df_stat_all[df_stat_all$River.Name == river_name2[i], "close19_24"], linetype = 'dotdash')
+   }} +
+   {if(!is.na(df_stat_all[df_stat_all$River.Name == river_name2[i], "close18_24"])){
+      geom_vline(xintercept = df_stat_all[df_stat_all$River.Name == river_name2[i], "close18_24"], linetype = 'dotted')
+   }} +
+   {if(!is.na(df_stat_all[df_stat_all$River.Name == river_name2[i], "mon19_23"])){
+      geom_vline(xintercept = df_stat_all[df_stat_all$River.Name == river_name2[i], "mon19_23"], linetype = 'dotdash')      
+   }} +
+   {if(!is.na(df_stat_all[df_stat_all$River.Name == river_name2[i], "mon18_23"])){
+      geom_vline(xintercept = df_stat_all[df_stat_all$River.Name == river_name2[i], "mon18_23"], linetype = 'dotted')
+   }} +
+   {if(!is.na(df_stat_all[df_stat_all$River.Name == river_name2[i], "close19_23"])){
+      geom_vline(xintercept = df_stat_all[df_stat_all$River.Name == river_name2[i], "close19_23"], linetype = 'dotdash')
+   }} +
+   {if(!is.na(df_stat_all[df_stat_all$River.Name == river_name2[i], "close18_23"])){
+      geom_vline(xintercept = df_stat_all[df_stat_all$River.Name == river_name2[i], "close18_23"], linetype = 'dotted')
+   }} +
+   theme_bw(base_size = 12) +
+   {if(!is.na(df20_23_range[df20_23_range$River.Name == river_name2[i], "Date.of.Closure"])) {
+      geom_rect(data = df20_23_range |> filter(River.Name == river_name2[i]), 
+                aes(xmin = min(Date.of.Closure), xmax = max(Re.open.Date), ymin = -Inf, ymax = Inf), alpha = 0.3, fill = 'darkgrey')    
+   }} +
+   {if(!is.na(df20_24_range[df20_24_range$River.Name == river_name2[i], "Date.of.Closure"])) {
+      geom_rect(data = df20_24_range |> filter(River.Name == river_name2[i]), 
+                aes(xmin = min(Date.of.Closure), xmax = max(Re.open.Date), ymin = -Inf, ymax = Inf), alpha = 0.3, fill = 'darkgrey')    
+   }} +
+   
+   scale_color_manual(name = "Temperature-based river status",
+                      labels = c("open", "monitored", "closed"),
+                      breaks = c("open", "monitored", "closed"),
+                      values = c('black', 'darkorange', 'red')) +
+   labs(x = "Date",
+        #y = "Temperature (°C)",
+        title = paste0(
+           river_name2[i],
+           ", SFA = ", 
+          df20$SFA[df20$River.Name == river_name2[i]][1],
+          ", River # = ", 
+          df20$River.Number[df20$River.Name == river_name2[i]][1]
+           )) +
+   scale_y_continuous(name = "Water Temperature (°C)",
+                      sec.axis = sec_axis(trans= ~./15, 
+                                          name = "Water Level (meters)"), 
+                      limits = c(10, 33)) + # /10 to reduce the axis
+   scale_x_datetime(date_breaks = "1 month", date_labels = "%b") +
+   theme(legend.position = "bottom") + 
+   facet_wrap(~Year, scales = "free_x")
+   
+   
+print(p3)      
+}
+```
+
+
+# SFA 10-14A + St. Lewis
+
+```{r figs SFA 10-14A, message = FALSE, echo = FALSE, warning = FALSE}
+
+#river_name3 <- river_name[29:41] # set river names for SFA(s)
+river_name3 <- river_name[29:38] # set river names for SFA(s)
+
+for (i in seq_along(river_name3)) {
+p4 <- ggplot() +
+   geom_line(data = df20 |> filter(River.Name == river_name3[i]), aes(x = Time, y = Temp.C, color = "open")) +
+   {if(nrow(df20 |> filter(River.Name == river_name3[i] & status == "closed")) > 0){
+      geom_line(data = df20 |> filter(River.Name == river_name3[i] & status == "closed"), 
+                aes(x = Time, y = Temp.C, group = period, color = "closed"))   
+   }} +
+   {if(nrow(df20 |> filter(River.Name == river_name3[i] & status == "monitored")) > 0){
+      geom_line(data = df20 |> filter(River.Name == river_name3[i] & status == "monitored"), 
+                aes(x = Time, y = Temp.C, group = period, color = "monitored"))
+   }} +
+   {if(nrow(water_lev |> filter(River.Name == river_name3[i])) > 1){
+      geom_line(data = water_lev |> filter(River.Name == river_name3[i] & !is.na(new)), aes(x = Time, y = new), colour = 'blue') 
+   }} +
+   geom_hline(yintercept = 20, linetype = 'dashed') +
+   geom_hline(yintercept = 19, linetype = 'dotdash') +
+   geom_hline(yintercept = 18, linetype = 'dotted') +
+   {if(!is.na(df_stat_all[df_stat_all$River.Name == river_name3[i], "mon19_24"])){
+      geom_vline(xintercept = df_stat_all[df_stat_all$River.Name == river_name3[i], "mon19_24"], linetype = 'dotdash')      
+   }} +
+   {if(!is.na(df_stat_all[df_stat_all$River.Name == river_name3[i], "mon18_24"])){
+      geom_vline(xintercept = df_stat_all[df_stat_all$River.Name == river_name3[i], "mon18_24"], linetype = 'dotted')
+   }} +
+   {if(!is.na(df_stat_all[df_stat_all$River.Name == river_name3[i], "close19_24"])){
+      geom_vline(xintercept = df_stat_all[df_stat_all$River.Name == river_name3[i], "close19_24"], linetype = 'dotdash')
+   }} +
+   {if(!is.na(df_stat_all[df_stat_all$River.Name == river_name3[i], "close18_24"])){
+      geom_vline(xintercept = df_stat_all[df_stat_all$River.Name == river_name3[i], "close18_24"], linetype = 'dotted')
+   }} +
+   {if(!is.na(df_stat_all[df_stat_all$River.Name == river_name3[i], "mon19_23"])){
+      geom_vline(xintercept = df_stat_all[df_stat_all$River.Name == river_name3[i], "mon19_23"], linetype = 'dotdash')      
+   }} +
+   {if(!is.na(df_stat_all[df_stat_all$River.Name == river_name3[i], "mon18_23"])){
+      geom_vline(xintercept = df_stat_all[df_stat_all$River.Name == river_name3[i], "mon18_23"], linetype = 'dotted')
+   }} +
+   {if(!is.na(df_stat_all[df_stat_all$River.Name == river_name3[i], "close19_23"])){
+      geom_vline(xintercept = df_stat_all[df_stat_all$River.Name == river_name3[i], "close19_23"], linetype = 'dotdash')
+   }} +
+   {if(!is.na(df_stat_all[df_stat_all$River.Name == river_name3[i], "close18_23"])){
+      geom_vline(xintercept = df_stat_all[df_stat_all$River.Name == river_name3[i], "close18_23"], linetype = 'dotted')
+   }} +
+   theme_bw(base_size = 12) +
+   {if(!is.na(df20_23_range[df20_23_range$River.Name == river_name3[i], "Date.of.Closure"])) {
+      geom_rect(data = df20_23_range |> filter(River.Name == river_name3[i]), 
+                aes(xmin = min(Date.of.Closure), xmax = max(Re.open.Date), ymin = -Inf, ymax = Inf), alpha = 0.3, fill = 'darkgrey')    
+   }} +
+   {if(!is.na(df20_24_range[df20_24_range$River.Name == river_name3[i], "Date.of.Closure"])) {
+      geom_rect(data = df20_24_range |> filter(River.Name == river_name3[i]), 
+                aes(xmin = min(Date.of.Closure), xmax = max(Re.open.Date), ymin = -Inf, ymax = Inf), alpha = 0.3, fill = 'darkgrey')    
+   }} +
+   
+   scale_color_manual(name = "Temperature-based river status",
+                      labels = c("open", "monitored", "closed"),
+                      breaks = c("open", "monitored", "closed"),
+                      values = c('black', 'darkorange', 'red')) +
+   labs(x = "Date",
+        #y = "Temperature (°C)",
+        title = paste0(
+           river_name3[i],
+           ", SFA = ", 
+          df20$SFA[df20$River.Name == river_name3[i]][1],
+          ", River # = ", 
+          df20$River.Number[df20$River.Name == river_name3[i]][1]
+           )) +
+   scale_y_continuous(name = "Water Temperature (°C)",
+                      sec.axis = sec_axis(trans= ~./15, 
+                                          name = "Water Level (meters)"), 
+                      limits = c(10, 33)) + # /10 to reduce the axis
+   scale_x_datetime(date_breaks = "1 month", date_labels = "%b") +
+   theme(legend.position = "bottom") + 
+   facet_wrap(~Year, scales = "free_x")
+   
+   
+print(p4)      
+}
+```
+
+
+# Table 2023
+
+```{r table data 2023, message = FALSE, echo = FALSE, warning = FALSE}
+# loop ----
+## select essential cols ----
+year <- 2023
+temp <-  df20 |>
+    select(Year, SFA, Time, River.Name,  Temp.C, status, status19, status18) |>
+   filter(Year == 2023)
+river_name <- unique(temp$River.Name)
+#temp |> filter(River.Name == "Eagle River")
+
+
+## make frame for the table ----
+tab1 <- temp[1:(length(river_name)*3), ]
+tab1[, 1:length(tab1)] <- NA
+tab1$Date <- NA
+tab1$Time <- ymd_hms(tab1$Time)
+tab1$Date <- ymd(tab1$Date)
+#str(tab1)
+
+# loop-start ----
+for(i in seq_along(river_name)){
+   #browser()
+   tab <-
+      bind_rows(
+      temp |> filter(River.Name == river_name[i] & status == "monitored") |> slice_min(Time),
+       temp |> filter(River.Name == river_name[i] & status19 == "monitored") |> slice_min(Time),
+       temp |> filter(River.Name == river_name[i] & status18 == "monitored") |> slice_min(Time)
+      ) |>
+     mutate(Date = date(Time))
+
+   if(nrow(tab) == 2){
+      tab <- tab |>
+         add_row(tab, .before = 1)
+      tab[1, 5:9] <- NA
+   }
+
+   if(nrow(tab) == 1){
+      tab <- tab |>
+         add_row(tab, .before = 1) |>
+         add_row(tab, .before = 1)
+      tab[1:2, 5:9] <- NA
+   }
+   if(nrow(tab) == 0){
+      tab <- tab |>
+         add_row(tab, .before = 1)
+      tab[1:3, 5:9] <- NA
+   }
+   if(i ==1) {
+      tab1[c(i, i+1, i+2),] <- tab
+   } else {
+      tab1[c((i*2)+(i-2), (i*2)+(i-1), (i*2)+(i)),] <- tab
+   }
+}
+#tab1
+#str(tab1)
+
+#source("closure_FUN.R")
+
+#river_status(temp)
+
+# clean ----
+tab1$temp <- as.integer(rep(c("20", "19", "18"), length(river_name)))
+
+date_fill <- ymd("1900-01-01")
+tab1 <- tab1 |> mutate(Date = case_when(is.na(Date) ~ as.Date(date_fill), TRUE ~ Date))
+#str(tab1)
+
+
+```
+
+```{r table 2023, , message = FALSE, echo = FALSE, warning = FALSE}
+tab1_wide <- tab1  |>
+   select(Year, SFA, River.Name, Date, temp) |>
+   group_by(temp) |>
+   mutate(pivot_id = 1:n()) |>
+   ungroup () |>
+   pivot_wider(
+      names_from = temp,
+      names_prefix = "Temp_",
+      values_from = Date
+   ) |>
+   select(-pivot_id)
+
+# clean table
+tab1_wide <- na.omit(tab1_wide)
+tab1_wide$SFA <- as.integer(tab1_wide$SFA)
+is.na(tab1_wide) <- tab1_wide == "1900-01-01"
+
+# differences
+tab1_wide$diff19 <- as.numeric(tab1_wide$Temp_20 - tab1_wide$Temp_19)
+tab1_wide$diff18 <- as.numeric(tab1_wide$Temp_20 - tab1_wide$Temp_18)
+
+tab1_wide <- tab1_wide |>
+   filter(!River.Name %in% c("Hunt River", "Northeast Brook, Trepassey","Northeast River, Placentia", "Rattling Brook", "Lomond Main River"))
+
+# html version
+kbl(tab1_wide |> arrange(SFA), align = 'lllccccc') |>
+   add_header_above(header = c(" " = 3, "Temp" = 3, "Days" = 2)) |>
+   column_spec(3, width = "65mm") |>
+   column_spec(1:2, width = "18mm") |>
+   column_spec(4:6, width = "30mm") |>
+   column_spec(7:8, width = "18mm")
+```
+
+
+
+# Table 2024
+
+```{r table data 2024, , message = FALSE, echo = FALSE, warning = FALSE}
+# loop ----
+## select essential cols ----
+year <- 2024
+temp <-  df20 |>
+    select(Year, SFA, Time, River.Name,  Temp.C, status, status19, status18) |>
+   filter(Year == 2024)
+river_name <- unique(temp$River.Name)
+#temp |> filter(River.Name == "Eagle River")
+
+
+## make frame for the table ----
+tab1 <- temp[1:(length(river_name)*3), ]
+tab1[, 1:length(tab1)] <- NA
+tab1$Date <- NA
+tab1$Time <- ymd_hms(tab1$Time)
+tab1$Date <- ymd(tab1$Date)
+#str(tab1)
+
+# loop-start ----
+for(i in seq_along(river_name)){
+   #browser()
+   tab <-
+      bind_rows(
+      temp |> filter(River.Name == river_name[i] & status == "monitored") |> slice_min(Time),
+       temp |> filter(River.Name == river_name[i] & status19 == "monitored") |> slice_min(Time),
+       temp |> filter(River.Name == river_name[i] & status18 == "monitored") |> slice_min(Time)
+      ) |>
+     mutate(Date = date(Time))
+
+   if(nrow(tab) == 2){
+      tab <- tab |>
+         add_row(tab, .before = 1)
+      tab[1, 5:9] <- NA
+   }
+
+   if(nrow(tab) == 1){
+      tab <- tab |>
+         add_row(tab, .before = 1) |>
+         add_row(tab, .before = 1)
+      tab[1:2, 5:9] <- NA
+   }
+   if(nrow(tab) == 0){
+      tab <- tab |>
+         add_row(tab, .before = 1)
+      tab[1:3, 5:9] <- NA
+   }
+   if(i ==1) {
+      tab1[c(i, i+1, i+2),] <- tab
+   } else {
+      tab1[c((i*2)+(i-2), (i*2)+(i-1), (i*2)+(i)),] <- tab
+   }
+}
+#tab1
+#str(tab1)
+
+#source("closure_FUN.R")
+
+#river_status(temp)
+
+# clean ----
+tab1$temp <- as.integer(rep(c("20", "19", "18"), length(river_name)))
+
+date_fill <- ymd("1900-01-01")
+tab1 <- tab1 |> mutate(Date = case_when(is.na(Date) ~ as.Date(date_fill), TRUE ~ Date))
+#str(tab1)
+
+
+```
+
+```{r table 2024, message = FALSE, echo = FALSE, warning = FALSE}
+tab1_wide <- tab1  |>
+   select(Year, SFA, River.Name, Date, temp) |>
+   group_by(temp) |>
+   mutate(pivot_id = 1:n()) |>
+   ungroup () |>
+   pivot_wider(
+      names_from = temp,
+      names_prefix = "Temp_",
+      values_from = Date
+   ) |>
+   select(-pivot_id)
+
+# clean table
+tab1_wide <- na.omit(tab1_wide)
+tab1_wide$SFA <- as.integer(tab1_wide$SFA)
+is.na(tab1_wide) <- tab1_wide == "1900-01-01"
+
+# differences
+tab1_wide$diff19 <- as.numeric(tab1_wide$Temp_20 - tab1_wide$Temp_19)
+tab1_wide$diff18 <- as.numeric(tab1_wide$Temp_20 - tab1_wide$Temp_18)
+
+tab1_wide <- tab1_wide |>
+   filter(!River.Name %in% c("Hunt River", "Northeast Brook, Trepassey","Northeast River, Placentia", "Rattling Brook", "Lomond Main River"))
+
+# html version
+kbl(tab1_wide |> arrange(SFA), align = 'lllccccc') |>
+   add_header_above(header = c(" " = 3, "Temp" = 3, "Days" = 2)) |>
+   column_spec(3, width = "65mm") |>
+   column_spec(1:2, width = "18mm") |>
+   column_spec(4:6, width = "30mm") |>
+   column_spec(7:8, width = "18mm")
+```
+

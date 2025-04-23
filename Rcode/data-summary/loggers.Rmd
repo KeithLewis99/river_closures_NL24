@@ -1,0 +1,92 @@
+---
+title: "2022 Temperature Overview: Loggers"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = 'C:/Users/Geissingere/Documents/Projects/Temperature-Project')
+library(tidyverse)
+library(lubridate)
+library(plotly)
+library(leaflet)
+```
+
+```{r load data, echo = FALSE}
+loggers <- read.csv("./data-working/output/logger-data-2022-cleaned.csv") |> 
+  mutate(Time2 = ymd_hms(Time)) |> 
+  mutate(Time3 = ymd_hms(paste(Time, "00:00:00", sep = " ")),
+         Time3 = replace(Time3, !is.na(Time2), NA)) |> 
+  mutate(Time = coalesce(Time2, Time3)) |> 
+  dplyr::select(-Time2, -Time3)
+
+```
+
+
+
+```{r data vis crosstalk prep, echo = FALSE}
+
+library(crosstalk)
+
+
+log2 <- loggers |> 
+  group_by(Serial) |> 
+  complete(Time = seq.POSIXt(min(Time), max(Time), by = "1 day")) |> 
+  ungroup() |> 
+  arrange(Time) 
+shared_loggers <- SharedData$new(log2, ~SFA)
+
+
+```
+
+
+
+Column {data-width=400}
+---------------------------------------
+
+### Site Map
+```{r, echo = FALSE}
+leaflet(data = shared_loggers) |>
+  setView(lng = -55.67, lat=48.93, zoom=5 ) |>
+  addTiles() |>
+  addCircleMarkers(
+              color= ~SFA,
+              # fillColor = ~col.code,
+              popup = ~paste0(Station,
+                              "<br>Lat: ", Lat,
+                              "<br>Long: ", Long),
+              radius = 5,
+              stroke = TRUE,
+              weight = 1,
+              fillOpacity = .8)
+
+
+```
+
+
+Column {data-width=600}
+------------------------------------------
+### Water temperature
+```{r, echo = FALSE}
+
+plot_ly(data = shared_loggers,
+        x = ~Time,
+        y = ~Temp.C,
+        color = ~Station,
+        type = "scatter", mode = "lines",
+        opacity = .8)
+```
+
+
+### Water Level
+```{r, echo = FALSE}
+
+plot_ly(data = shared_loggers,
+        x = ~Time,
+        y = ~Level.m,
+        color = ~Station,
+        type = "scatter", mode = "lines",
+        opacity = .8)
+
+```

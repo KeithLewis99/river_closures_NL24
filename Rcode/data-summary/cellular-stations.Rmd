@@ -1,0 +1,336 @@
+---
+title: "Hobo weather station data exploration"
+output: flexdashboard::flex_dashboard
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = 'C:/Users/Geissingere/Documents/Projects/Temperature-Project')
+library(tidyverse)
+library(lubridate)
+library(plotly)
+library(leaflet)
+library(DT)
+```
+
+```{r load data, echo = FALSE}
+source("./Rcode/data-cleaning/hobolink_station_combo.R")
+source("./Rcode/data-cleaning/hobolink_station_cleaning.R")
+
+```
+
+
+```{r data vis, echo = FALSE}
+
+pal <- c(  "#A6761D", "#E6AB02", "#1B9E77", "#D95F02", "#E7298A", "#7570B3", "#666666", "#66A61E", "darkviolet", "royalblue", "firebrick", "deepskyblue", "tomato", "pink","lightblue", "gold"  )
+
+pal <- setNames(pal, c("Amy's Lake", "Burlington", "Campbellton", "Caroline Brook", "Exploits Bishops Fishway", "Exploits Goodyears Dam", "Garnish River",
+                       "Hunt River Labrador", "Terra Nova Lower Fishway", "North East Placentia", "Trepassey NW Brook", "Salmon Brook Near Glenwood",
+                       "Salmonier River", "Shinneys", "Stoney", "Tommy's Arm"))
+
+pal2 <- data.frame( River = c("Amy's Lake", 
+                              "Burlington", 
+                              "Campbellton", 
+                              "Caroline Brook", 
+                              "Exploits Bishops Fishway", 
+                              "Exploits Goodyears Dam", 
+                              "Garnish River",
+                              "Hunt River Labrador", 
+                              "Terra Nova Lower Fishway", 
+                              "North East Placentia", 
+                              "Trepassey NW Brook", 
+                              "Salmon Brook Near Glenwood", 
+                              "Salmonier River", 
+                              "Shinneys", 
+                              "Stoney", 
+                              "Tommy's Arm"),
+                    group = c("Science", 
+                              "C&P",
+                              "Science",
+                              "Science",
+                              "Science", 
+                              "Science",
+                              "C&P",
+                              "Science",
+                              "C&P",
+                              "C&P",
+                              "C&P",
+                              "C&P",
+                              "Science",
+                              "Science",
+                              "C&P",
+                              "C&P"),
+                    col.code= c(  "#A6761D", "#E6AB02", "#1B9E77", "#D95F02", "#E7298A", "#7570B3", "#666666", "#66A61E", "darkviolet", "royalblue", "firebrick", "deepskyblue", "tomato", "pink","lightblue", "gold"  ))
+
+hobo2 <- hobo |>
+  filter(year(Time) == 2023) |> 
+  left_join(pal2, join_by(Station == River)) |>
+  rename(River = Station) |> 
+  mutate(group = replace(group, is.na(group), "C&P")) |> 
+  distinct(River, lat, long, col.code, group)
+
+
+
+hobo3 <- hobo2 |> filter(River == "Bay de l'Eau") |> 
+  mutate(status = "Attempt again 2024 season") |> 
+  add_row(River = "Biscay Bay",
+          lat = 46.7842678,
+          long = -53.2796728,
+          status = '2024 season') |> 
+    add_row(River = "Northwest Gander",
+          lat = 48.6717494,
+          long = -55.2475884,
+          status = '2024 season') |> 
+    add_row(River = "Torrent River",
+          lat = 50.6130565,
+          long = -57.1375959,
+          status = '2024 season') |> 
+  add_row(River = "Eagle River",
+          lat = 53.57369,
+            long = -57.44692,
+          status = '2024 season')
+
+## remove repeat of campbelton
+hobo2 <- hobo2[-5,]
+
+p <- leaflet() |>
+  setView(lng = -55.67, lat=49, zoom=5 ) |>
+  addTiles() |>
+  addCircleMarkers( data = hobo2 |> distinct(River, lat, long, col.code, group),
+              color= 'black',
+              fillColor = 'darkred',
+              label = ~River,
+              popup = ~paste0(River,
+                              "<br>",group,
+                              "<br>Lat: ", lat,
+                              "<br>Long: ", long),
+              radius = 5,
+              stroke = TRUE,
+              weight = 1,
+              fillOpacity = .8) |> 
+    addCircleMarkers( data = hobo3 |> distinct(River, lat, long, col.code, group, status),
+              color= 'black',
+              fillColor = 'navy',
+              label = ~River,
+              popup = ~paste0(River,
+                              "<br>",status,
+                              "<br>Lat: ", lat,
+                              "<br>Long: ", long),
+              radius = 5,
+              stroke = TRUE,
+              weight = 1,
+              fillOpacity = .8) |> 
+  addScaleBar(position = "bottomright") %>%
+  addLegend( title = "Hobo Weather Stations",
+             position = "topright",
+             colors = c('darkred', 'navy'),
+             labels = c("Current stations", "New stations") )
+
+
+p
+library(htmlwidgets)
+
+saveWidget(p, file = "./output/hobo-weather-stations.html")
+
+```
+
+
+```{r data vis crosstalk prep, echo = FALSE}
+
+library(crosstalk)
+
+pal2 <- data.frame( Station = c("Amy's Lake", "Burlington", "Campbellton", "Caroline Brook", "Exploits Bishops Fishway", "Exploits Goodyears Dam", "Garnish River","Hunt River Labrador", "Terra Nova Lower Fishway", "North East Placentia", "Trepassey NW Brook", "Salmon Brook Near Glenwood", "Salmonier River", "Shinneys", "Stoney", "Tommy's Arm"),
+                    col.code= c(  "#A6761D", "#E6AB02", "#1B9E77", "#D95F02", "#E7298A", "#7570B3", "#666666", "#66A61E", "darkviolet", "royalblue", "firebrick", "deepskyblue", "tomato", "pink","lightblue", "gold"  ))
+
+
+# hobo22 <- hobo |> 
+#   dplyr::select(Station, Time, WaterTemperature_C, WaterLevel_meters, lat, long, SFA, River.Number) |> 
+#   filter(!is.na(WaterTemperature_C)) |> 
+#   filter(year(Time) == 2022) |> 
+#   group_by(Station) |> 
+#   complete(Time = seq.POSIXt(min(Time), max(Time), by = "1 hour")) |> 
+#   ungroup() |> 
+#   arrange(Time) |> 
+#   left_join(pal2)
+# 
+# shared_hobo22 <- SharedData$new(hobo22, ~SFA)
+
+hobo <- hobo |> 
+  dplyr::select(Station, Time, WaterTemperature_C, WaterLevel_meters, lat, long, SFA, River.Number) |> 
+  filter(!is.na(WaterTemperature_C)) |> 
+  group_by(Station) |> 
+  complete(Time = seq.POSIXt(min(Time), max(Time), by = "1 day")) |> 
+  ungroup() |> 
+  arrange(Time) |> 
+  left_join(pal2) |> 
+  mutate(Year = year(Time)) |> 
+  filter(Year == 2023)
+shared_hobo <- SharedData$new(hobo, ~SFA) 
+
+hobosum <- hobo |> 
+  dplyr::select(Station, Time, WaterTemperature_C, WaterLevel_meters, lat, long, SFA, River.Number) |> 
+  filter(!is.na(WaterTemperature_C)) |> 
+  group_by(Station) |> 
+  complete(Time = seq.POSIXt(min(Time), max(Time), by = "1 day")) |> 
+  ungroup() |> 
+  arrange(Time) |> 
+  left_join(pal2) |> 
+  mutate(Year = year(Time)) |> 
+  filter(Year == 2023) |> 
+  mutate(Date = date(Time)) |> 
+  group_by(Date, Station, River.Number, SFA) |> 
+  summarise(daily_Temp = mean(WaterTemperature_C)) |> 
+  ungroup()
+sd <- SharedData$new(hobosum, ~SFA) 
+
+pal <- c(  "#A6761D", "#E6AB02", "#1B9E77", "#D95F02", "#E7298A", "#7570B3", "#666666", "#66A61E", "darkviolet", "royalblue", "firebrick", "deepskyblue", "tomato", "pink","lightblue", "gold"  )
+
+pal <- setNames(pal, c("Amy's Lake", "Burlington", "Campbellton", "Caroline Brook", "Exploits Bishops Fishway", "Exploits Goodyears Dam", "Garnish River",
+                       "Hunt River Labrador", "Terra Nova Lower Fishway", "North East Placentia", "Trepassey NW Brook", "Salmon Brook Near Glenwood",
+                       "Salmonier River", "Shinneys", "Stoney", "Tommy's Arm"))
+
+
+
+
+
+### add SF areas to the check marks
+```
+
+```{r data vis final, echo = FALSE}
+# bscols(
+# list(
+#   # filter_slider("date", "Time", shared_hobo, ~Time, timeFormat = "%F %T"),
+#   filter_checkbox("River", "River", shared_hobo, ~River, inline = TRUE)),
+# leaflet(data = shared_hobo) |>
+#   setView(lng = -55.67, lat=48.93, zoom=5 ) |>
+#   addTiles() |>
+#   addCircleMarkers(
+#               color= ~River,
+#               fillColor = ~col.code,
+#               popup = ~paste0(River,
+#                               "<br>Lat: ", lat,
+#                               "<br>Long: ", long),
+#               radius = 5,
+#               stroke = TRUE,
+#               weight = 1,
+#               fillOpacity = .8),
+# plot_ly(data = shared_hobo,
+#         x = ~Time,
+#         y = ~WaterTemperature_C,
+#         color = ~River,
+#         type = "scatter", mode = "lines",
+#         opacity = .8,
+#         colors = pal),
+# plot_ly(data = shared_hobo,
+#         x = ~Time,
+#         y = ~WaterLevel_meters,
+#         color = ~River,
+#         type = "scatter", mode = "lines",
+#         opacity = .8,
+#         colors = pal)
+#   
+# )
+
+```
+
+```{r, echo = FALSE}
+# filter_checkbox("SFA", "SFA", shared_hobo22, ~SFA, columns = 1)
+```
+
+
+```{r, echo = FALSE}
+# leaflet(data = shared_hobo22) |>
+#   setView(lng = -55.67, lat=48.93, zoom=5 ) |>
+#   addTiles() |>
+#   addCircleMarkers(
+#               color= ~Station,
+#               fillColor = ~col.code,
+#               popup = ~paste0(Station,
+#                               "<br>Lat: ", lat,
+#                               "<br>Long: ", long),
+#               radius = 5,
+#               stroke = TRUE,
+#               weight = 1,
+#               fillOpacity = .8)
+
+
+```
+
+
+```{r, echo = FALSE}
+
+# plot_ly(data = shared_hobo22,
+#         x = ~Time,
+#         y = ~WaterTemperature_C,
+#         color = ~Station,
+#         type = "scatter", mode = "lines",
+#         opacity = .8,
+#         colors = pal)
+```
+
+
+```{r, echo = FALSE}
+
+# plot_ly(data = shared_hobo22,
+#         x = ~Time,
+#         y = ~WaterLevel_meters,
+#         color = ~Station,
+#         type = "scatter", mode = "lines",
+#         opacity = .8,
+#         colors = pal)
+
+```
+
+Column {data-width=400}
+---------------------------------------
+
+### Site Map
+```{r, echo = FALSE}
+leaflet(data = hobo |> distinct(lat, long, Station, col.code)) |>
+  setView(lng = -55.67, lat=48.93, zoom=5 ) |>
+  addTiles() |>
+  addCircleMarkers(
+              color= ~Station,
+              fillColor = ~col.code,
+              popup = ~paste0(Station,
+                              "<br>Lat: ", lat,
+                              "<br>Long: ", long),
+              radius = 5,
+              stroke = TRUE,
+              weight = 1,
+              fillOpacity = .8)
+
+
+```
+
+
+Column {data-width=500}
+------------------------------------------
+### Water temperature
+```{r figure, echo = FALSE}
+
+plot_ly(data = shared_hobo,
+        x = ~Time,
+        y = ~WaterTemperature_C,
+        color = ~Station,
+        type = "scatter", mode = "lines",
+        opacity = .8,
+        colors = pal)
+```
+
+
+### summary Table
+```{r table, echo = FALSE}
+
+datatable(sd)
+
+```
+
+Column {data-width=50}
+---------------------------
+```{r filter, echo = FALSE}
+# Create a filter input
+filter_slider("Date", "Time", sharedData = sd, column = ~Date)
+```
+

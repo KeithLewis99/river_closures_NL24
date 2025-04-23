@@ -1,0 +1,244 @@
+---
+title: "C & P Temperature Data Overview"
+output: flexdashboard::flex_dashboard
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = 'C:/Users/Geissingere/Documents/Projects/Temperature-Project')
+library(tidyverse)
+library(lubridate)
+library(plotly)
+library(leaflet)
+library(DT)
+library(crosstalk)
+```
+
+```{r load data, echo = FALSE, warning = FALSE}
+source("./Rcode/data-cleaning/cp_logger_combo.R")
+
+```
+
+
+```{r loggers, echo = FALSE, warning = FALSE, message= FALSE}
+
+source("./Rcode/data-cleaning/logger-metadata-2024.R")
+
+# source("./Rcode/data-cleaning/hobolink_station_combo.R")
+# source("./Rcode/data-cleaning/hobolink_station_cleaning.R")
+
+removes <- current.loggers |> 
+  filter(Recording == "Hobo Weather Station") |> 
+  filter(Station %in% c("BDL", "Goodyears Dam", "North East Placentia")) |> 
+  mutate(remove = "yes")
+
+
+positions <- data.frame(Station = c("Grey River", "Eagle ", "Eagle River", "Sandhill", 
+                                  'Char Brook 2', "Char Brook 1", 'Hunt River', 'St. Lewis River',
+                                  'Gander River', "Flowers", "Salmon River (Main Brook)", "Serpentine River",
+                                  "West Brook River", "Lapoile River"),
+                        Lat = c(47.7, 53.5, 53.58747, 53.58747,  
+                                55.6, 55.6, 55.5, 52.4,
+                                49.24853, 55.63294, 49.01228, 48.96094, 
+                                48.83364, 47.83728),
+                        Long = c(-56.9, -57.5, -56.35394, -56.35394, 
+                                  -60.9, -60.9, -60.7, -56.4,
+                                 -54.50048, -61.42194, -54.91569, -58.4317,
+                                 -56.00881, -58.28581)) 
+
+partner.loggers <- read.csv("./data-working/Partner-loggers/Meta Data for Partner Loggers.csv") |> 
+  rename(Serial = Serial..,
+         Station = Site.Name) |> 
+  left_join(positions, join_by(Station)) |> 
+  mutate(Lat = coalesce(Latitude, Lat),
+         Long = coalesce(Longitude, Long)) |> 
+  dplyr::select(Station, Lat, Long, Serial, Organization) |> 
+  mutate(Recording = "Water",
+         Group = "Partners")
+
+cp.loggers <- read.csv("./data-working/C & P 2024/2024 C& P Metadata.csv") |> 
+  rename(Station = River,
+         Serial = Logger.SN,
+         Lat = Latitude,
+         Long = Longitude) |> 
+  mutate(Group = "C&P") |> 
+  mutate(Recording = "Water") |> 
+  mutate(Serial = as.character(Serial))
+
+
+## loggers
+loggers <- current.loggers |> 
+  left_join(removes) |> 
+  filter(is.na(remove)) |> 
+  dplyr::select(-remove) |> 
+  bind_rows(partner.loggers) |> 
+  ## add Gray River and Grandy's River
+
+  add_row(Station = "Grandys River", 
+          Lat = 47.689433,
+          Long = -57.001846,
+          Recording = "Water",
+          SFA = "12",
+          River.Number = 125,
+          River.Name = "Grandy's River",
+          Group = "CAFE") |> 
+  ## make sure group is correctly reflected
+  mutate(Group = replace(Group, is.na(Group) & River.Number == 61 & Logger.Type == "Tidbit", "FABEC"),
+         Group = replace(Group, is.na(Group) & River.Number == 60 & Logger.Type == "Tidbit", "FABEC"),
+         Group = replace(Group, is.na(Group) & River.Number == 59 & Logger.Type == "Tidbit", "FABEC"),
+         Group = replace(Group, is.na(Group) & River.Number == 62 & Logger.Type == "Tidbit", "FABEC")) |> 
+  mutate(Group = replace(Group, is.na(Group) & Serial %in% c(21417670, 21290092, 21042542, 21290104), "SAEN")) |>
+  mutate(Group = replace(Group, is.na(Group) & Recording == "Water" & River.Name == "Hunt River", "AROC")) |> 
+  mutate(Group = replace(Group, Recording == "Hobo Weather Station" & Serial %in% c(21560024, 21560027,	21931677, 21560020,	21560026, 21931676,21560019,21931680, 21931681, 21560023,	21368518), "C&P")) |> 
+  mutate(Group = replace(Group, Recording == "Level" & Station == "Shinneys River", "NCC")) |> 
+  ## all remaining are cafe
+  mutate(Group = replace(Group, is.na(Group), "CAFE")) |> 
+  ## remove bad data
+  filter(!Serial %in% c(86,46,48,123456)) |> 
+  dplyr::select(Station, Lat, Long, Recording, Serial, Logger.Type, SFA, River.Number, River.Name, Group) |> 
+  distinct() |> 
+  ## remove duplicates
+  filter(Station != "Indian Bay Brook") |> 
+  filter(Serial != 21436595) |> 
+  ## remove partner loggers in main data and add updated list
+  filter(Group %in% c("CAFE", "C&P")) |> 
+  bind_rows(partner.loggers) |> 
+  bind_rows(cp.loggers)
+  
+  
+
+```
+
+
+```{r detachment, echo = FALSE}
+detach <- read.csv("./data-working/Copy of CnP Detachments and Rivers.csv") |> 
+  rename(River.Number = River.No.)
+
+loggers <- loggers |> 
+  left_join(detach) |> 
+  filter(Recording!="Air")
+loggers2 <- loggers |> 
+  mutate(Group = replace(Group, Recording == "Hobo Weather Station" & Group == "CAFE", "Hobo Weather Station - Science"),
+         Group = replace(Group, Recording == "Hobo Weather Station" & Group == "C&P", "Hobo Weather Station - C&P")) |> 
+  mutate(Group = replace(Group, Group == "CAFE", "Science"))
+
+Encoding(loggers2$Station) <- "latin1"
+
+```
+
+
+```{r shared data setup, echo = FALSE}
+shared <- SharedData$new(cpTemp)
+
+
+```
+
+
+Column {data-width=450}
+----------------------------
+
+### Map
+```{r map, echo = FALSE, warning = FALSE}
+
+leaflet() |>
+  setView(lng = -55.67, lat=49, zoom=5 ) |>
+  addTiles() |>
+  addCircleMarkers( data = loggers2 |> filter(Group == "Partners"),
+              color= 'black',
+              fillColor = 'darkgreen',
+              label = ~Station,
+              popup = ~paste0(Station,
+                              "<br>",Group,
+                              "<br>Lat: ", Lat,
+                              "<br>Long: ", Long),
+              radius = 5,
+              stroke = TRUE,
+              weight = 1,
+              fillOpacity = .8) |> 
+      addCircleMarkers( data = loggers2 |> filter(Group == "Science"),
+              color= 'black',
+              fillColor = 'blue',
+              label = ~Station,
+              popup = ~paste0(Station,
+                              "<br>",Group,
+                              "<br>Lat: ", Lat,
+                              "<br>Long: ", Long),
+              radius = 5,
+              stroke = TRUE,
+              weight = 1,
+              fillOpacity = .8) |> 
+    addCircleMarkers( data = loggers2 |> filter(Group == "C&P"),
+              color= 'black',
+              fillColor = 'purple',
+              label = ~Station,
+              popup = ~paste0(Station,
+                              "<br>",Group,
+                              "<br>Lat: ", Lat,
+                              "<br>Long: ", Long),
+              radius = 5,
+              stroke = TRUE,
+              weight = 1,
+              fillOpacity = .8) |> 
+    addCircleMarkers( data = loggers2 |> filter(Group == "Hobo Weather Station - Science"),
+              color= 'black',
+              fillColor = 'darkorange',
+              label = ~Station,
+              popup = ~paste0(Station,
+                              "<br>",Group,
+                              "<br>Lat: ", Lat,
+                              "<br>Long: ", Long),
+              radius = 5,
+              stroke = TRUE,
+              weight = 1,
+              fillOpacity = .8) |> 
+    addCircleMarkers( data = loggers2 |> filter(Group == "Hobo Weather Station - C&P"),
+              color= 'black',
+              fillColor = 'darkorange',
+              label = ~Station,
+              popup = ~paste0(Station,
+                              "<br>",Group,
+                              "<br>Lat: ", Lat,
+                              "<br>Long: ", Long),
+              radius = 5,
+              stroke = TRUE,
+              weight = 1,
+              fillOpacity = .8) |> 
+  addScaleBar(position = "bottomright") |> 
+  addLegend( title = "Temperature Loggers",
+             position = "topright",
+             labels = c("Hobo Weather Station", "C&P", "Science", "Partners"),
+             colors = c("darkorange", "purple", 'blue', 'darkgreen') )
+
+
+```
+
+
+Column {data-width=450}
+----------------------------------
+
+### Temperature Plots
+```{r temperature, echo = FALSE, warning = FALSE}
+
+plot_ly(shared,
+       x = ~Time, 
+       y = ~Temp.C, 
+       text = ~River,
+       type = "scatter",
+       mode = "lines") |> 
+    layout(
+         xaxis = list(title = list(text = "Time")),
+         yaxis = list(title = list(text = "Water Temperature")))
+
+
+```
+
+
+
+Column {data-width=100}
+------------------
+### Select River
+```{r filter exploits 2021, echo = FALSE}
+# filter_checkbox("Month", "Select Month", sharedEX22, ~Month, inline = TRUE)
+filter_select("River", "Select River", shared, ~River, multiple = FALSE)
+```

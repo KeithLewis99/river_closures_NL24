@@ -1,0 +1,138 @@
+---
+title: "2_Hobo-2024"
+output: html_document
+date: "`r Sys.Date()`"
+---
+<!-- The purpose of these graphs is to display all the data on the left and then the data with the out of water temperature and deployment dates removed in red on the right. -->
+
+```{r setup, include=FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# knitr::opts_knit$set(root.dir = 'C:/Users/Geissingere/Documents/Projects/Temperature-Project')
+knitr::opts_knit$set(root.dir = 'C:/Users/lewiske/Documents/CAFE/projects/temperature/river_closures')
+options(knitr.kable.NA = '')
+
+library(tidyverse)
+library(lubridate)
+library(knitr)
+# library(pandoc)
+# library(kableExtra)
+library(ggpubr)
+library(leaflet)
+
+```
+
+```{r load data, echo = FALSE, message = FALSE}
+## Station data
+source("./Rcode/data-cleaning/1_hobolink_station_combo_2024.R")
+
+hobo <- hobo24 |> 
+  # filter out temperature when sensor is out of water
+  mutate(out.of.water = 0,
+         out.of.water = replace(out.of.water, WaterLevel_meters <=0, 1))
+```
+
+
+
+```{r date filter, echo=FALSE}
+## ---- filter data based on deployment time -----
+
+# # filter data based on last upload
+# t1.1 <- hobo |> 
+#   filter(!is.na(Data.Date)) |> 
+#   filter(Time >= Data.Date) |> 
+#   mutate(grouping = "Group 1")
+
+
+# filter data based on deployment time
+t1.2 <- hobo |>
+  filter(is.na(Time)) |> ## select loggers that haven't been uploaded before
+  filter(!is.na(dply_dt_tm)) |> 
+  filter(Time >= dply_dt_tm ) |> 
+  mutate(grouping = "Group 1")
+## 11 loggers
+
+## data without deployement times
+t1.3 <- hobo |>
+  # filter(is.na(Data.Date)) |>
+  # select loggers without deployment times
+  filter(is.na(dply_dt_tm)) |>
+  # select loggers that haven't been uploaded before
+  # group_by(Serial) |>
+  # mutate(row = seq(1:n())) |>
+  # ungroup() |>
+  ## remove first 168 hours (7 days)
+  # filter(row > 168) |>
+  # dplyr::select(-row) |>
+  mutate(grouping = "Group 2")
+# ## 13
+
+t1 <- bind_rows(t1.2, t1.3)
+
+```
+
+
+
+```{r water level filter, echo = FALSE}
+
+t2 <- hobo |>
+  mutate(out.of.water = replace(out.of.water, WaterTemperature_C < -1, 1)) |> 
+  mutate(WaterTemperature_C = replace(WaterTemperature_C, WaterTemperature_C < -100, NA),
+         WaterTemperature_C = replace(WaterTemperature_C, WaterTemperature_C > 100, NA))
+
+```
+
+```{r purpose, echo = FALSE}
+print("The purpose of these graphs is to display all the data on the left and then the data with the out of water temperature and deployment dates removed in red on the right.")
+```
+
+```{r filter check 2, warning = FALSE, echo = FALSE}
+
+SNlist <- unique(hobo$Serial)
+
+for (i in seq_along(SNlist)) {
+  p1 <- hobo |> 
+    filter(Serial == SNlist[i]) |> 
+    filter(!is.na(WaterTemperature_C)) |> 
+    ggplot() +
+    geom_point(aes(x = Time, y = WaterTemperature_C)) +
+    ggtitle(paste(hobo$Recording[hobo$Serial==SNlist[i]], SNlist[i], hobo$Station[hobo$Serial == SNlist[i]])) +
+    ylim(min(hobo$WaterTemperature_C[hobo$Serial == SNlist[i]], na.rm = TRUE),
+         max(hobo$WaterTemperature_C[hobo$Serial == SNlist[i]], na.rm = TRUE)) +
+    xlim(min(hobo$Time[hobo$Serial == SNlist[i]], na.rm = TRUE),
+         max(hobo$Time[hobo$Serial == SNlist[i]], na.rm = TRUE))
+  # p2 <- t2 |> 
+  #   filter(Serial == SNlist[i]) |> 
+  #   filter(!is.na(Temp.C)) |> 
+  #   ggplot() +
+  #   geom_point(aes(x = Time, y = Temp.C)) +
+  #   ggtitle(paste(t1$Recording[t1$Serial==SNlist[i]], SNlist[i], t1$Station[t1$Serial == SNlist[i]])) +
+  #   ylim(min(t1$Temp.C[t1$Serial == SNlist[i]], na.rm = TRUE),
+  #        max(t1$Temp.C[t1$Serial == SNlist[i]], na.rm = TRUE)) +
+  #   xlim(min(t1$Time[t1$Serial == SNlist[i]], na.rm = TRUE),
+  #        max(t1$Time[t1$Serial == SNlist[i]], na.rm = TRUE))
+  p2 <- t2 |> 
+    filter(Serial == SNlist[i]) |> 
+    # filter(!is.na(Temp.C)) |> 
+    ggplot() +
+    geom_point(aes(x = Time, y = WaterTemperature_C, colour = as.character(out.of.water))) +
+    ggtitle(paste(t2$Recording[t2$Serial==SNlist[i]], SNlist[i], t2$Station[t2$Serial==SNlist[i]]))  +
+    ylim(min(t2$WaterTemperature_C[t2$Serial == SNlist[i]], na.rm = TRUE),
+         max(t2$WaterTemperature_C[t2$Serial == SNlist[i]], na.rm = TRUE)) +
+    xlim(min(t2$Time[t2$Serial == SNlist[i]], na.rm = TRUE),
+         max(t2$Time[t2$Serial == SNlist[i]], na.rm = TRUE)) +
+    scale_color_manual(values = c("black", "red", "darkorange")) +
+    theme(legend.position = "bottom")
+  
+  p <- ggarrange(p1, p2, nrow = 1)
+  print(p)
+  
+}
+```
+
+```{r write data}
+
+hobo24 <- t2 |> 
+  dplyr::select(Station, Serial, Time.UTC, WaterPressure_kPa, DiffPressure_kPa, WaterTemperature_C, WaterLevel_meters, BarometricPressure_kPa, Rain_mm, Temperature_C, Time, AirTemperature_C, SFA, River.Name, River.Number, dply_dt_tm, lat, long, out.of.water)
+
+write.csv(hobo24, "./data-working/output/hobo-station-data-2024-combined.csv", row.names = FALSE)
+```

@@ -1,0 +1,739 @@
+---
+title: "Labrador Data for Compliance Meeting"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+
+```{r setup, include=FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+knitr::opts_knit$set(root.dir = 'C:/Users/Geissingere/Documents/Projects/Temperature-Project')
+options(knitr.kable.NA = '')
+
+library(tidyverse)
+library(lubridate)
+library(knitr)
+# library(pandoc)
+# library(kableExtra)
+library(ggpubr)
+# library(leaflet)
+# library(osmdata)
+# library(sf)
+# library(geodata)
+# library(kableExtra)
+
+```
+
+```{r load data}
+source("./Rcode/data-cleaning/logger_data_lab_2023.R")
+
+Labfull <- read.csv("./data-working/output/compiled-water-temperature-13Nov2023.csv") |> 
+  filter(SFA == 1 | SFA == 2) |> 
+  mutate(Time = replace(Time, is.na(Time), "00:00:00")) |> 
+  mutate(Date.Time = ymd_hms(paste(Date, Time), tz = "Canada/Atlantic")) |> 
+  dplyr::select(-Date, -Time) |> 
+  bind_rows(labLogs) |> 
+  rename(Time = Date.Time) |> 
+  mutate(Date = date(Time),
+         year = year(Time),
+         month = month(Time)) |> 
+  mutate(River.Name = replace(River.Name, River.Name == "Flowers River", "Char Lake"))
+  
+
+```
+
+
+```{r summary stats, message = FALSE}
+# ----- summary statistics -----
+# % time above 20 and 24 separated by month and region
+
+
+# total hours recorded for each river each month
+monthly_hours <- Labfull |>
+  filter(!is.na(Temp.C)) |>
+  mutate(month = month(Time)) |>
+  group_by(Station, Serial, Recording, year, month, SFA, River.Number) |>
+  summarise(total_hours = n()) |>
+  ungroup()
+
+monthly_days <- Labfull |>
+  filter(!is.na(Temp.C)) |>
+  mutate(month = month(Time),
+         Day = date(Time)) |>
+  distinct(Station, Serial, Recording, year, month, Day) |>
+  group_by(Station, Serial, Recording, year, month) |>
+  summarise(total_days = n()) |>
+  ungroup()
+
+
+
+```
+
+
+
+
+
+
+```{r overall summary by month, message = FALSE, warning = FALSE}
+
+Labfull |>
+  filter(!is.na(Temp.C)) |>
+  mutate(Month = month(Time)) |>
+  group_by(year, Month, SFA) |>
+  summarise(mean(Temp.C), sd(Temp.C), min(Temp.C), max(Temp.C))
+
+
+# ## By Month
+# Labfull |>
+#   filter(!is.na(Temp.C)) |>
+#   mutate(Month = month(Time)) |>
+#   group_by(Year, Month, SFA) |>
+#   summarise(Temp = mean(Temp.C), SDTemp = sd(Temp.C), minTemp = min(Temp.C), maxTemp = max(Temp.C)) |>
+#   ungroup() |>
+#   mutate(Date = ym(paste(year, Month))) |>
+#   filter(year >= 2022) |>
+#   ggplot() +
+#   geom_line(aes(x = Month, y = Temp)) +
+#   geom_ribbon(aes(x = Month, ymin = Temp - SDTemp, ymax = Temp + SDTemp),alpha = 0.3) +
+#   facet_grid(SFA~Year)
+
+
+# ## By Day
+# Labfull |>
+#   filter(!is.na(Temp.C)) |>
+#   mutate(Day = yday(Time)) |>
+#   group_by(year, Day, SFA) |>
+#   summarise(Temp = mean(Temp.C), SDTemp = sd(Temp.C), minTemp = min(Temp.C), maxTemp = max(Temp.C)) |>
+#   ungroup() |>
+#   filter(year >= 2022) |>
+#   ggplot() +
+#   geom_line(aes(x = Day, y = Temp)) +
+#   geom_ribbon(aes(x = Day, ymin = Temp - SDTemp, ymax = Temp + SDTemp),alpha = 0.3) +
+#   facet_grid(SFA~Year)
+
+
+# total hours recorded for each river each month
+monthly_hours
+
+# percent of total time above 20 °C per month (6, 7, 8, 9) by sfa**
+## group SFA1 and SFA2 together
+## group NL together
+# 20 C
+above20 <- Labfull |>
+  filter(!is.na(Temp.C)) |>
+  mutate(month = month(Time),
+         MonthName = month(Time, label = TRUE),
+         threshold = 'below') |>
+  mutate(threshold = replace(threshold, Temp.C > 20, 'above')) |>
+  group_by(threshold, Station, Serial, Recording, year, month, SFA, MonthName) |>
+  summarise(hours = n()) |>
+  ungroup() |>
+  left_join(monthly_hours) |>
+  ## only use for months with > 15 days of data recorded (720 hrs)
+  filter(total_hours > 360) |>
+  mutate(percent_hours = hours/total_hours*100) |>
+  filter(year >= 2022) |>
+  # filter(threshold == "above") |>
+  filter(month == 5 | month == 6 | month == 7 | month == 8 | month == 9) |> 
+  filter(!is.na(SFA)) |> 
+  group_by(threshold, SFA, year, month, MonthName) |>
+  summarise(Percent = mean(percent_hours), SD = sd(percent_hours), N= n()) |>
+  ungroup()
+
+# percent of total time above 24 °C per month by SFA**
+# 24 C
+above24 <- Labfull |>
+  filter(!is.na(Temp.C)) |>
+  mutate(month = month(Time),
+         threshold = 'below') |>
+  mutate(threshold = replace(threshold, Temp.C > 24, 'above')) |>
+  group_by(threshold, Station, Serial, Recording, year, month, SFA) |>
+  summarise(hours = n()) |>
+  ungroup() |>
+  left_join(monthly_hours) |>
+  ## only use for months with > 15 days of data recorded (720 hrs)
+  filter(total_hours > 360) |>
+  mutate(percent_hours = hours/total_hours*100) |>
+  filter(year >= 2022) |>
+  # filter(threshold == "above") |>
+  filter(month == 6 | month == 7 | month == 8 | month == 9) |> 
+  filter(!is.na(SFA)) |> 
+  group_by(threshold, SFA, year, month) |>
+  summarise(Percent = mean(percent_hours), SD = sd(percent_hours), N= n()) |>
+  ungroup()
+
+
+
+## Average temperatures
+Labfull |>
+  # filter(!is.na(Temp.C)) |>
+  mutate(month = month(Time)) |>
+  ## group SFA 1 and SFA 2 together
+  mutate(Region = "Nfld",
+         Region = replace(Region, SFA == 1, "Lab"),
+         Region = replace(Region, SFA == 2, "Lab")) |>
+ ## create season variable
+  mutate(season = NA,
+         season = replace(season, month >=6 & month <=8, "summer"),
+         season = replace(season, month == 9 | month == 10, "autumn"),
+         season = replace(season, month <= 5 & Temp.C > 0, "spring")) |>
+  group_by(Region, Year, season) |>
+  summarise(Mean = mean(Temp.C), sd = sd(Temp.C), minT = min(Temp.C), maxT = max(Temp.C)) |>
+  filter(Year >= 2022) |>
+  arrange(Region, season, Year) 
+
+
+
+## days above 20
+# by full days > 20
+days_above20 <- Labfull |>
+  filter(!is.na(Temp.C)) |>
+  mutate(threshold = 0) |>
+  mutate(threshold = replace(threshold, Temp.C > 20, 1)) |>
+  mutate(Day = date(Time),
+         month = month(Time)) |>
+  group_by(Year, Day, month, Station, Serial, Recording, SFA, River.Number) |>
+  summarise(daily.threshold = sum(threshold), N=n()) |>
+  ungroup() |>
+  filter(N>=24) |>
+  mutate(hours = daily.threshold/N*24) |>
+  # mutate(percent.above = daily.threshold/24) |>
+  mutate(threshold = NA,
+         threshold = replace(threshold, hours == 0, "full days below 20 °C"),
+         threshold = replace(threshold, hours == 24, 'full days above 20 °C'),
+         threshold = replace(threshold, hours >0 & hours < 24,  'partial days above 20 °C')) |>
+  group_by(threshold,Year, month, Station, Serial, Recording, SFA, River.Number) |>
+  summarise(N = n()) |>
+  ungroup() |>
+  left_join(monthly_days) |>
+  mutate(Percent_days = N/total_days *100) |>
+   filter(month == 6 | month == 7 | month == 8 | month == 9) |> 
+  filter(!is.na(SFA)) |> 
+  group_by(threshold, Year, month, SFA) |>
+  summarise(percent_days = mean(Percent_days), sd=sd(Percent_days), N = n()) |>
+  ungroup() |> 
+  mutate(threshold = factor(threshold, levels = c('full days above 20 °C', 'partial days above 20 °C',"full days below 20 °C")))
+
+# by full days > 20
+days_above24 <- Labfull |>
+  filter(!is.na(Temp.C)) |>
+  mutate(threshold = 0) |>
+  mutate(threshold = replace(threshold, Temp.C > 24, 1)) |>
+  mutate(Day = date(Time),
+         month = month(Time)) |>
+  group_by(Year, Day, month, Station, Serial, Recording, SFA, River.Number) |>
+  summarise(daily.threshold = sum(threshold), N=n()) |>
+  ungroup() |>
+  filter(N>=24) |>
+  mutate(hours = daily.threshold/N*24) |>
+  # mutate(percent.above = daily.threshold/24) |>
+  mutate(threshold = NA,
+         threshold = replace(threshold, hours == 0, "full days below 24 °C"),
+         threshold = replace(threshold, hours == 24, 'full days above 24 °C'),
+         threshold = replace(threshold, hours >0 & hours < 24,  'partial days above 24 °C')) |>
+  group_by(threshold,Year, month, Station, Serial, Recording, SFA, River.Number) |>
+  summarise(N = n()) |>
+  ungroup() |>
+  left_join(monthly_days) |>
+  mutate(Percent_days = N/total_days *100) |>
+   filter(month == 6 | month == 7 | month == 8 | month == 9) |> 
+  filter(!is.na(SFA)) |> 
+  group_by(threshold, Year, month, SFA) |>
+  summarise(percent_days = mean(Percent_days), sd=sd(Percent_days), N = n()) |>
+  ungroup() |> 
+  mutate(threshold = factor(threshold, levels = c('full days above 24 °C', 'partial days above 24 °C', "full days below 24 °C" )))
+
+```
+
+```{r summary percent above figures}
+ggplot(above20 |> 
+         mutate(threshold = paste(threshold, "20 °C")) |> 
+         mutate(SFAnum = SFA,
+                SFA = paste("SFA", SFA),
+                SFA = factor(SFA),
+                SFA = fct_reorder(SFA, SFAnum))) +
+  geom_bar(aes( x = MonthName, y = Percent, fill = threshold ), stat = "identity") +
+  facet_grid(year~SFA) +
+  scale_fill_manual(values = c('orange', 'grey')) +
+  theme_bw() +
+  labs(y = "Percent of hours",
+       x = "Month",
+       fill = "",
+       title = "Percent of total monthly hours above 20 °C") +
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5),
+        strip.text.y = element_text(size = 12),
+        strip.text.x = element_text(size = 11),
+        axis.title = element_text(size = 12),
+        axis.text.x = element_text(size = 11, angle = 90, vjust = 0)) +
+  ylim(0,100)
+
+ggsave(file = "./output/figures/percent_hours_20Lab.png", device = "png", units = "in", height = 4.5, width = 6.5)
+
+
+
+## broken down by River
+Labfull |>
+  filter(!is.na(Temp.C)) |>
+  mutate(month = month(Time),
+         MonthName = month(Time, label = TRUE),
+         threshold = 'below') |>
+  mutate(threshold = replace(threshold, Temp.C > 20, 'above')) |>
+  group_by(threshold, Station, Serial, River.Name, River.Number, Recording, year, month, SFA, MonthName) |>
+  summarise(hours = n()) |>
+  ungroup() |>
+  left_join(monthly_hours) |>
+  ## only use for months with > 15 days of data recorded (720 hrs)
+  filter(total_hours > 360) |>
+  mutate(percent_hours = hours/total_hours*100) |>
+  filter(year >= 2022) |>
+  # filter(threshold == "above") |>
+  filter(month == 5 | month == 6 | month == 7 | month == 8 | month == 9) |> 
+  filter(!is.na(SFA)) |> 
+  group_by(threshold, SFA, River.Name, River.Number, year, month, MonthName) |>
+  summarise(Percent = mean(percent_hours), SD = sd(percent_hours), N= n()) |>
+  ungroup() |> 
+         mutate(threshold = paste(threshold, "20 °C")) |> 
+    mutate(River.ID = paste(River.Number, ". ", River.Name, sep = ""),
+           River.ID = replace(River.ID, River.Name == "Char Lake", "Char Lake"),
+           River.ID = as.factor(River.ID),
+         River.ID = fct_reorder(River.ID, River.Number, .na_rm = TRUE)) |> 
+  ggplot() +
+  geom_bar(aes( x = MonthName, y = Percent, fill = threshold ), stat = "identity") +
+  facet_grid(year~River.ID) +
+  scale_fill_manual(values = c('orange', 'grey')) +
+  theme_bw() +
+  labs(y = "Percent of hours",
+       x = "Month",
+       fill = "",
+       title = "Percent of total monthly hours above 20 °C") +
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5),
+        strip.text.y = element_text(size = 12),
+        strip.text.x = element_text(size = 11),
+        axis.title = element_text(size = 12),
+        axis.text.x = element_text(size = 11, angle = 90, vjust = 0)) +
+  ylim(0,100)
+
+ggsave(file = "./output/figures/percent_hours_20LabRivers.png", device = "png", units = "in", height = 5, width = 7)
+
+```
+
+```{r full summary}
+## daily stats
+daily <- Labfull |> 
+  group_by(Station, River.Number, SFA, Date) |> 
+  summarise(Daily_Temp = mean(Temp.C, na.rm = TRUE), sd_Temp = sd(Temp.C, na.rm = TRUE),
+            Tmax = max(Temp.C, na.rm = TRUE), Tmin = min(Temp.C, na.rm = TRUE)) |> 
+  ungroup() |> 
+  mutate(month = month(Date)) |> 
+  filter(SFA != 11) |> filter(Station != "Amy's Lake") |> 
+  filter(!is.na(River.Number)) |> 
+  filter(!is.na(SFA)) |> 
+  mutate(year = year(Date)) |> 
+  filter(!is.na(Daily_Temp))
+
+
+monthly <- daily |> 
+  filter(!is.na(SFA)) |> 
+  filter(SFA != 11) |> 
+  filter(Station != "Amy's Lake") |> 
+  filter(!is.na(River.Number)) |> 
+  # remove stations with less than 15 days within a month
+  group_by(Station, River.Number, year, SFA, month) |> 
+  mutate(Days = n()) |> 
+  ungroup() |> 
+  filter(Days >= 15) |>
+  # monthly stats by SFA 
+  mutate(Month = month(Date, label = TRUE)) |> 
+  group_by(SFA, year, month, Month) |> 
+  summarise(Mean_Temp = mean(Daily_Temp, na.rm = TRUE), TempSD = sd(Daily_Temp, na.rm = TRUE),
+            Max = mean(Tmax, na.rm = TRUE), MaxSD = sd(Tmax, na.rm = TRUE), Min = mean(Tmin, na.rm = TRUE), MinSD = sd(Tmin, na.rm = TRUE)) |> 
+  ungroup() |> 
+  # mutate(Date = my(paste(month, year, sep = "-"))) |> 
+  filter(year >= 2022) |>
+  filter(month == 5 | month == 6 | month == 7 | month == 8 | month == 9) |> 
+  mutate(Date = ymd(paste(year, month,15)))
+
+# ## by river
+# daily |> 
+#   # filter(SFA !=11) |> 
+#   # filter(Station != "Amy's Lake") |> 
+#   # filter(!is.na(River.Number)) |> 
+#   # filter(!is.na(SFA)) |>
+#   group_by(Date, SFA) |> 
+#   summarise(Temp = mean(Daily_Temp, na.rm = TRUE), TempSD = sd(Daily_Temp, na.rm = TRUE)) |>
+#   ungroup() |> 
+#   group_by(SFA) |> 
+#   complete(Date = seq.POSIXt(min(ymd_hms(paste(Date, "00:00:00"))), max(ymd_hms(paste(Date, "00:00:00"))), by = "1 day")) |> 
+#   mutate(SFA = factor(SFA, levels = sort(seq_along(SFA)))) |> 
+#   ggplot() +
+#   geom_line(aes( x= Date, y = Temp, colour = SFA))
+
+
+
+
+```
+
+
+```{r regional}
+
+Lab <- c(1, 2)
+
+
+# library(ggh4x)
+
+facet_bounds <- data.frame(year = c("2022", "2023"),
+                           xmin = c(as_date("2022-05-01"), as_date("2023-05-01")),
+                           xmax = c(as_date("2022-10-01"), as_date("2023-10-01")))
+facet_scales <-split(facet_bounds, facet_bounds$year)
+
+scales <- lapply(facet_scales, function(a) {
+  scale_x_date(limits = c(a$xmin, a$xmax))
+})
+
+R1 <- monthly |>
+  filter(SFA %in% Lab) |> 
+  filter(year >= 2022) |> 
+  mutate(SFA = paste("SFA", SFA)) |> 
+  ggplot() +
+  geom_hline(yintercept = 20, linetype = 'dashed', colour = 'red') +
+  ## daily trends
+  geom_smooth(data = daily |> 
+                filter(SFA %in% Lab) |> 
+                 mutate(SFA = paste("SFA", SFA)) |> 
+                filter(year >= 2022) |> 
+                filter(month == 5 | month == 6 | month == 7 | month == 8 | month == 9), 
+              aes(x = Date, y = Tmin), colour = 'blue') +
+  geom_smooth(data = daily |> 
+                filter(SFA %in% Lab) |> 
+                 mutate(SFA = paste("SFA", SFA)) |> 
+                filter(year >= 2022) |> 
+                filter(month == 5 | month == 6 | month == 7 | month == 8 | month == 9), 
+              aes(x = Date, y = Tmax), colour = 'orange') +
+  geom_smooth(data = daily |> 
+                filter(SFA %in% Lab) |> 
+                filter(year >= 2022) |> 
+                 mutate(SFA = paste("SFA", SFA)) |> 
+                filter(month == 5 | month == 6 | month == 7 | month == 8 | month == 9), 
+              aes(x = Date, y = Daily_Temp), colour = 'black') +
+  ## monthly trends
+  geom_point(aes(x = Date, y = Min, fill = "Min"), shape = 22, size = 2) +
+  geom_point(aes(x = Date, y = Max, fill = "Max"), shape = 22, size = 2) +
+    geom_point(aes(x = Date, y = Mean_Temp, fill = "Mean"), shape = 22, size = 2) +
+  facet_grid(SFA~year, scales = "free_x") +
+  ggh4x::facetted_pos_scales(x = scales) +
+  theme_bw() +
+  scale_fill_manual(values = c("Mean" = 'black', 
+                               "Max" = 'orange', 
+                               "Min" = 'blue')) +
+    labs(y = "Water Temperature (°C)",
+       x = "Month",
+       fill = "",
+       title = "Labrador") +
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5))
+
+R1
+ggsave(R1, file = "./output/figures/R1.png", device = "png", height = 4, width = 5)
+```
+
+```{r Hunt River full}
+# 
+# facet_bounds <- data.frame(year = c("2015", "2016", "2017", "2018", "2019", "2020","2021","2022", "2023"),
+#                            xmin = c(as_date("2015-05-01"),
+#                                     as_date("2016-05-01"), as_date("2017-05-01"),
+#                                     as_date("2018-05-01"), as_date("2019-05-01"),
+#                                     as_date("2020-05-01"), as_date("2021-05-01"),
+#                                     as_date("2022-05-01"), as_date("2023-05-01")),
+#                            xmax = c(as_date("2015-10-01"),
+#                                     as_date("2016-10-01"), as_date("2017-10-01"),
+#                                     as_date("2018-10-01"), as_date("2019-10-01"),
+#                                     as_date("2020-10-01"), as_date("2021-10-01"),
+#                                     as_date("2022-10-01"), as_date("2023-10-01")))
+# facet_scales <-split(facet_bounds, facet_bounds$year)
+# 
+# scales <- lapply(facet_scales, function(a) {
+#   scale_x_date(limits = c(a$xmin, a$xmax))
+# })
+# 
+# 
+# Labfull |> 
+#   filter(year >= 2015) |> 
+#   filter(River.Name == "Hunt River") |>
+#   group_by(year, Date, month) |> 
+#   summarise(Daily_Temp = mean(Temp.C, na.rm = TRUE), sdTemp = sd(Temp.C, na.rm = TRUE)) |> 
+#   filter(month == 5 | month == 6 | month == 7 | month == 8 | month == 9) |> 
+#   ungroup() |> 
+#   group_by(year) |> 
+#   complete(Date = seq.Date(min(Date), max(Date), by = "1 day")) |> 
+#   ungroup() |> 
+#   ggplot() +
+#   geom_line(aes(x = Date, y = Daily_Temp)) +
+#   facet_wrap(~year, scales = "free_x") +
+#   ggh4x::facetted_pos_scales(x = scales)
+
+
+annual <- Labfull |> 
+  filter(year >= 2015) |> 
+  filter(River.Name == "Hunt River") |>
+  group_by(year, Date, month) |> 
+  summarise(Daily_Temp = mean(Temp.C, na.rm = TRUE), sdTemp = sd(Temp.C, na.rm = TRUE)) |> 
+  filter(month == 5 | month == 6 | month == 7 | month == 8 | month == 9 | month == 10) |> 
+  ungroup() |> 
+  group_by(year) |> 
+  complete(Date = seq.Date(min(Date), max(Date), by = "1 day")) |> 
+  ungroup() |> 
+  group_by(year) |> 
+  mutate(jan_first = as.Date(paste0(year(max(Date)), "-01-01"))) |> 
+  mutate(days_diff_jan_first = as.numeric(difftime(Date, jan_first, units = "days")))
+
+
+breaks <- as.numeric(difftime(seq(as.Date("2015-05-01"), as.Date("2015-10-31"),
+                                  by = "1 month"),
+                     as.Date("2015-01-01"),units = "days"))
+
+
+labels <- c("May", "June", "July", "August", "Sept", "Oct")
+
+cbPalette <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442","#CC79A7",  "#D55E00", "#0072B2", 'red')
+
+Hunt.Fig <- ggplot(data = annual) +
+    geom_hline(yintercept = 20, linetype = 'dashed') +
+  geom_line(mapping = aes(x = days_diff_jan_first, y = Daily_Temp, color = as.character(year))) +
+  scale_x_continuous(breaks = breaks, labels = labels) +
+  theme_bw() + 
+  labs(x = "Month",
+       y = "Daily Temperature (°C)",
+       color = "Year",
+       title = "Hunt River") +
+  scale_colour_manual(values = cbPalette) +
+  theme(plot.title = element_text(hjust = 0.5)) 
+
+ggsave(Hunt.Fig, file = "./output/figures/FullHuntRiverTemp.png", device = "png", units = "in", height = 5, width = 10)
+
+```
+
+
+
+```{r River comparison full}
+
+annual <- Labfull |> 
+  filter(year >= 2022) |> 
+  group_by(year, Date, month, River.Name, River.Number) |> 
+  summarise(Daily_Temp = mean(Temp.C, na.rm = TRUE), sdTemp = sd(Temp.C, na.rm = TRUE)) |> 
+  filter(month == 5 | month == 6 | month == 7 | month == 8 | month == 9 | month == 10) |>
+  ungroup() |> 
+  group_by(year, River.Name, River.Number) |>
+  complete(Date = seq.Date(min(Date), max(Date), by = "5 days")) |>
+  ungroup() |>
+  group_by(year) |> 
+  mutate(jan_first = as.Date(paste0(year(max(Date)), "-01-01"))) |> 
+  mutate(days_diff_jan_first = as.numeric(difftime(Date, jan_first, units = "days"))) |> 
+  ungroup() |> 
+    mutate(River.ID = paste(River.Number, ". ", River.Name, sep = ""),
+           River.ID = replace(River.ID, River.Name == "Char Lake", "Char Lake"),
+           River.ID = as.factor(River.ID),
+         River.ID = fct_reorder(River.ID, River.Number, .na_rm = TRUE))
+
+
+breaks <- as.numeric(difftime(seq(as.Date("2022-05-01"), as.Date("2022-10-31"),
+                                  by = "1 month"),
+                     as.Date("2022-01-01"),units = "days"))
+
+
+labels <- c("May", "June", "July", "August", "Sept", "Oct")
+
+# cbPalette <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", 'red')
+
+byRiver <- ggplot(data = annual) +
+    geom_hline(yintercept = 20, linetype = 'dashed', colour = 'darkred') +
+  geom_line(mapping = aes(x = days_diff_jan_first, y = Daily_Temp, color = as.character(year))) +
+  facet_wrap(~River.ID, ncol = 1) +
+  scale_x_continuous(breaks = breaks, labels = labels) +
+  theme_bw() + 
+  labs(x = "Month",
+       y = "Daily Temperature (°C)",
+       color = "Year") +
+  scale_colour_manual(values = c("#0072B2", 'red')) +
+  theme(legend.position = "bottom")
+
+ggsave(byRiver, file = "./output/figures/LabRiverAnnual.png", device = "png", units = "in", height = 7.5, width = 6)
+
+```
+
+```{r shinneys level}
+
+facet_bounds <- data.frame(year = c("2021","2022", "2023"),
+                           xmin = c(as_datetime("2021-05-01 00:00:00"),
+                                    as_datetime("2022-05-01 00:00:00"), 
+                                    as_datetime("2023-05-01 00:00:00")),
+                           xmax = c(as_datetime("2021-10-31 23:00:00"),
+                                    as_datetime("2022-10-31 23:00:00"), 
+                                    as_datetime("2023-10-31 23:00:00")))
+facet_scales <-split(facet_bounds, facet_bounds$year)
+
+scales <- lapply(facet_scales, function(a) {
+  scale_x_datetime(limits = c(a$xmin, a$xmax))
+})
+
+
+
+ShinLevel <- Labfull |>
+  filter(River.Name == "Shinney's River" & Recording == "Level") |>
+  filter(month == 5 | month == 6 | month == 7 | month == 8 | month == 9 | month == 10) |>
+  ungroup() |>
+  group_by(Station, year) |>
+  complete(Date = seq.Date(min(Date), max(Date), by = "1 day")) |>
+  ungroup() |>
+  ggplot() +
+  geom_hline(yintercept = 0, linetype = 'dashed', colour = 'darkgrey') +
+  geom_hline(yintercept = 20, linetype = 'dashed', colour = 'darkred') +
+  geom_line(aes(x = Time, y = Level.m*20, colour = "Water Level")) +
+  geom_line(aes( x = Time, y = Temp.C, colour = "Water Temperature")) +
+  labs(x = "Time",
+       y = "Temperature (°C)",
+       title = "Shinney's River") +
+  theme_bw() +
+  scale_x_datetime(date_labels = "%b-%Y") +
+  scale_y_continuous(sec.axis = sec_axis(name = "Water Level (m)",
+                                         trans = ~.x/20),
+                     limits = c(0,31)) +
+  scale_colour_manual( name = "Recording",
+                       breaks = c( 'Water Temperature', 'Water Level' ),
+                       values = c( 'Water Temperature' = 'black',
+                                   'Water Level' = 'blue' ) ) +
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust= 0.5)) +
+    facet_wrap(~year, scales = "free_x",ncol = 1) +
+  ggh4x::facetted_pos_scales(x = scales)
+
+ggsave(ShinLevel, file = "./output/figures/shinneysLevel.png", device = "png", units = "in", height = 7, width = 10)
+
+```
+
+```{r week comparisons}
+
+
+Labfull2 <- Labfull |> 
+  filter(Time >= as_datetime("2023-07-01 00:00:00") & Time <= as_datetime("2023-08-01 00:00:00")) |> 
+  mutate(hour = hour(Time)) |> 
+  group_by(Date, hour, River.Name, River.Number) |> 
+  summarise(Temp.C = mean(Temp.C, na.rm = TRUE), Level.m = mean(Level.m, na.rm = TRUE)) |> 
+  mutate(Time = ymd_h(paste(Date, hour))) |> 
+  ungroup() |> 
+    mutate(River.ID = paste(River.Number, ". ", River.Name, sep = ""),
+           River.ID = replace(River.ID, River.Name == "Char Lake", "Char Lake"),
+           River.ID = as.factor(River.ID),
+           River.ID = fct_reorder(River.ID, River.Number))
+
+July2023 <- ggplot() +
+  geom_hline(yintercept = 20, linetype = 'dashed', colour = 'red') +
+  geom_line(data = Labfull2 |>
+              filter(!is.na(Level.m)) |>
+  group_by(River.Name) |>
+  complete(Time = seq.POSIXt(min(Time), max(Time), by = "1 day")) |>
+  ungroup(),
+                     aes(x = Time, y = Level.m*10 +20, colour = "Water Level")) +
+  geom_line(data = Labfull2 |>
+              filter(!is.na(Temp.C)) |>
+  group_by(River.Name) |>
+  complete(Time = seq.POSIXt(min(Time), max(Time), by = "1 day")) |>
+  ungroup(),
+            aes( x = Time, y = Temp.C, colour = "Water Temperature")) +
+  facet_wrap(~River.ID, ncol = 1) +
+  labs(x = "Time", 
+       y = "Temperature (°C)",
+       title = "2023") +
+  theme_bw() +
+  scale_y_continuous(sec.axis = sec_axis(name = "Water Level (m)",
+                                         trans = ~(.x - 20)/10),
+                     limits =c(10,30)) +
+    scale_x_datetime(date_labels = "%d-%b") +
+  scale_colour_manual( name = "Recording",
+                       breaks = c( 'Water Temperature', 'Air Temperature', 'Water Level' ),
+                       values = c( 'Water Temperature' = 'black',
+                                   'Air Temperature' = 'darkred', 
+                                   'Water Level' = 'blue' ) ) +
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5))
+
+ggsave(July2023, file = "./output/figures/LabJuly2023.png", device = "png", units = "in", height = 6, width = 6)
+
+Labfull2 <- Labfull |> 
+  filter(Time >= as_datetime("2022-07-01 00:00:00") & Time <= as_datetime("2022-08-01 00:00:00")) |> 
+  mutate(hour = hour(Time)) |> 
+  group_by(Date, hour, River.Name, River.Number) |> 
+  summarise(Temp.C = mean(Temp.C, na.rm = TRUE), Level.m = mean(Level.m, na.rm = TRUE)) |> 
+  ungroup() |> 
+  mutate(Time = ymd_h(paste(Date, hour))) |> 
+    mutate(River.ID = paste(River.Number, ". ", River.Name, sep = ""),
+           River.ID = replace(River.ID, River.Name == "Char Lake", "Char Lake"),
+           River.ID = factor(River.ID, levels = c("2. Hunt River", "Char Lake", "15. Shinney's River")))
+
+July2022 <- ggplot() +
+  geom_hline(yintercept = 20, linetype = 'dashed', colour = 'red') +
+  geom_line(data = Labfull2 |>
+              filter(!is.na(Level.m)) |>
+  group_by(River.Name) |>
+  complete(Time = seq.POSIXt(min(Time), max(Time), by = "1 day")) |>
+  ungroup(),
+                     aes(x = Time, y = Level.m*10 +20, colour = "Water Level")) +
+  geom_line(data = Labfull2 |>
+              filter(!is.na(Temp.C)) |>
+  group_by(River.Name) |>
+  complete(Time = seq.POSIXt(min(Time), max(Time), by = "1 day")) |>
+  ungroup(),
+            aes( x = Time, y = Temp.C, colour = "Water Temperature")) +
+  facet_wrap(~River.ID, ncol = 1) +
+  labs(x = "Time", 
+       y = "Temperature (°C)",
+       title = "2022") +
+  theme_bw() +
+  scale_y_continuous(sec.axis = sec_axis(name = "Water Level (m)",
+                                         trans = ~(.x - 20)/10),
+                     limits = c(10,30)) +
+    scale_x_datetime(date_labels = "%d-%b") +
+  scale_colour_manual( name = "Recording",
+                       breaks = c( 'Water Temperature', 'Air Temperature', 'Water Level' ),
+                       values = c( 'Water Temperature' = 'black',
+                                   'Air Temperature' = 'darkred', 
+                                   'Water Level' = 'blue' ) ) +
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5))
+
+ggsave(July2022, file = "./output/figures/LabJuly2022.png", device = "png", units = "in", height = 6, width = 6)
+```
+
+```{r hunt all}
+allHunt <- Labfull |> 
+  filter(River.Name == "Hunt River") |> 
+  filter(Station != "Hunt River Loggers") |> 
+  filter(year >= 2021)
+
+## 2023 stations
+s23 <- c("Hunt Falls", "Hunt Gorge Dock", "Hunt River Falls 2")
+
+
+huntcomparison <- Labfull |> 
+  filter(Station %in% s23) |> 
+  filter(Time > as_datetime("2021-07-26 00:00:00")) |> 
+  mutate(Station = factor(Station, levels = c("Hunt Gorge Dock", "Hunt Falls", "Hunt River Falls 2"))) |> 
+  # group_by(Station, Date) |> 
+  # summarise(Temp.C = mean(Temp.C)) |> 
+  ggplot() +
+  geom_hline(yintercept = 20, linetype = 'dashed', colour = 'darkred') +
+  geom_line(aes(x = Time, y = Temp.C)) +
+  facet_wrap(~Station, ncol = 1) +
+  labs(x = "Time",
+       y = "Temperature (°C)",
+       title = "Hunt River (2021-2023)") +
+  scale_x_datetime(date_labels = "%b-%Y", breaks = "2 months") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle = 90, vjust = 0.5))
+
+ggsave(huntcomparison, file = "./output/figures/huntcomparison.png", device = "png", units = "in", height = 6, width = 10)
+
+```

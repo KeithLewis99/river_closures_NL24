@@ -1,0 +1,422 @@
+---
+title: "2024 logger data QC"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = 'C:/Users/Geissingere/Documents/Projects/Temperature-Project/')
+library(tidyverse)
+library(lubridate)
+library(ggpubr)
+```
+
+```{r raw data}
+## ---- data -----
+temperature <- read.csv("./data-working/output/logger-data-2024-full.csv") |> 
+  ## format datetime
+  mutate(Time = ymd_hms(paste(Date, Time, sep = " "))) |> 
+  ## format date column
+  mutate(Date = ymd(Date)) |> 
+  ## create a year only column
+  mutate(Year = year(Date)) |> 
+   ## format date deployed
+  mutate(Date.deployed.MDY = ymd(Date.deployed.MDY)) |> 
+  ## format time deployed
+  mutate(Time.deployed = ymd_hms(Time.deployed),
+         dnld_dt = ymd_hm(dnld_dt)) |> 
+  ## arrange columns in proper order
+  dplyr::select(Time, Temp.C, #Level.m, 
+                Serial, Recording, Station, Lat, Long, SFA, River.Number, River.Name,
+                Logger.Type, Depth.cm, Date, Year, Location.description,
+                Date.deployed.MDY, Time.deployed, dnld_dt, re_dply) |> 
+  ## for cases where time/date of logger deployement is incorrect
+  mutate(Time.deployed = replace(Time.deployed, Serial %in% c(21031471), NA))
+
+## 
+past22 <- read.csv("./data-working/output/logger-data-2022-cleaned.csv") |> 
+  mutate(Date.UTC = ymd(Date.UTC),
+         Time.UTC = ymd_hms(paste(Date.UTC, Time.UTC, tz = "UTC"))) |> 
+  dplyr::select(2:12, 22) 
+past23 <- read.csv("./data-working/output/logger-data-2023-cleaned.csv") |> 
+  mutate(Date.UTC = ymd(Date.UTC),
+         Time.UTC = ymd_hms(paste(Date.UTC, Time.UTC, tz = "UTC"))) |> 
+  dplyr::select(2:12, 22)
+
+past <- bind_rows(past22, past23) |> 
+  mutate(Time = with_tz(Time.UTC, tzone = "America/St_Johns")) |> 
+  distinct()
+
+ 
+```
+
+```{r previously downloaded data by serial and dates}
+past.loggers <- past |>
+  group_by(Station, Serial, SFA, River.Number, River.Name) |> 
+  filter(Time == max(Time)) |> 
+  ungroup() |> 
+  distinct(Serial, Time) |> 
+  rename(Data.Date = Time) |> 
+  mutate(Serial = as.character(Serial))
+
+temperature <- temperature |> 
+  left_join(past.loggers)
+
+
+temperature |> 
+  distinct(Station, Serial, Recording, Date.deployed.MDY, dnld_dt, Data.Date) |> 
+  filter(is.na(Data.Date)) |> 
+  group_by(Serial, Recording) |> 
+  filter(dnld_dt == max(dnld_dt))
+
+```
+
+
+```{r date filter}
+## ---- filter data based on deployment time -----
+
+# filter data based on last upload
+t1.1 <- temperature |> 
+  filter(!is.na(Data.Date)) |> 
+  filter(Time >= Data.Date) |> 
+  mutate(grouping = "Group 1")
+## 13 loggers
+
+# filter data based on deployment time
+t1.2 <- temperature |>
+  filter(is.na(Data.Date)) |> ## select loggers that haven't been uploaded before
+  filter(!is.na(Time.deployed)) |> 
+  filter(Time >= Time.deployed ) |> 
+  mutate(grouping = "Group 2")
+## 11 loggers
+
+## data without deployement times
+t1.3 <- temperature |>
+  filter(is.na(Data.Date)) |> 
+  # select loggers without deployment times
+  filter(is.na(Time.deployed)) |>
+  # select loggers that haven't been uploaded before
+  group_by(Serial) |>
+  mutate(row = seq(1:n())) |>
+  ungroup() |>
+  ## remove first 168 hours (7 days)
+  filter(row > 168) |>
+  dplyr::select(-row) |> 
+  mutate(grouping = "Group 3")
+## 13
+
+t1 <- bind_rows(t1.1, t1.2, t1.3)
+
+```
+
+```{r filter check 1, warning = FALSE, echo = FALSE}
+## check differences
+checkdiff <- anti_join(temperature, t1)
+
+nrow(t1) + nrow(checkdiff) == nrow(temperature)
+
+SNlist <- unique(temperature$Serial)
+
+for (i in seq_along(SNlist)) {
+  p1 <- temperature |> 
+    filter(Serial == SNlist[i]) |> 
+    filter(!is.na(Temp.C)) |> 
+    ggplot() +
+    geom_point(aes(x = Time, y = Temp.C)) +
+    ggtitle(paste(t1$grouping[t1$Serial == SNlist[i]], "Raw: ", SNlist[i])) +
+    ylim(min(temperature$Temp.C[temperature$Serial == SNlist[i]], na.rm = TRUE),
+         max(temperature$Temp.C[temperature$Serial == SNlist[i]], na.rm = TRUE)) +
+    xlim(min(temperature$Time[temperature$Serial == SNlist[i]], na.rm = TRUE),
+         max(temperature$Time[temperature$Serial == SNlist[i]], na.rm = TRUE))
+  p2 <- checkdiff |> 
+    filter(Serial == SNlist[i]) |> 
+    filter(!is.na(Temp.C)) |> 
+    ggplot() +
+    geom_point(aes(x = Time, y = Temp.C)) +
+    ggtitle(paste(t1$grouping[t1$Serial == SNlist[i]], "Removed: ", SNlist[i])) +
+    ylim(min(temperature$Temp.C[temperature$Serial == SNlist[i]], na.rm = TRUE),
+         max(temperature$Temp.C[temperature$Serial == SNlist[i]], na.rm = TRUE)) +
+    xlim(min(temperature$Time[temperature$Serial == SNlist[i]], na.rm = TRUE),
+         max(temperature$Time[temperature$Serial == SNlist[i]], na.rm = TRUE))
+  p3 <- t1 |> 
+    filter(Serial == SNlist[i]) |> 
+    filter(!is.na(Temp.C)) |> 
+    ggplot() +
+    geom_point(aes(x = Time, y = Temp.C)) +
+    ggtitle(paste(t1$grouping[t1$Serial == SNlist[i]], "Retained: ", SNlist[i])) +
+    ylim(min(temperature$Temp.C[temperature$Serial == SNlist[i]], na.rm = TRUE),
+         max(temperature$Temp.C[temperature$Serial == SNlist[i]], na.rm = TRUE)) +
+    xlim(min(temperature$Time[temperature$Serial == SNlist[i]], na.rm = TRUE),
+         max(temperature$Time[temperature$Serial == SNlist[i]], na.rm = TRUE))
+  
+  p <- ggarrange(p1, p2, p3, nrow = 1)
+  print(p)
+  
+}
+```
+
+
+```{r water level, eval = FALSE}
+
+## level loggers
+t1 |> filter(Recording == "Level") |> 
+  distinct(Station, River.Name)
+
+## Salmonier, Char Brook, Highlands, Salmon Cove, Renews
+
+
+## Highlands level compared to other Highlands
+ggplot() +
+  geom_line(data = t1 |> 
+              filter(River.Name == "Highlands River" & Recording == "Level") |> 
+              filter(!is.na(Temp.C) & !is.na(Level.m)),
+            aes( x = Time, y = Level.m*30), colour = 'red')+
+  geom_line(data = t1 |> filter(River.Name == "Highlands River" & Recording == "Level") |> 
+              filter(!is.na(Temp.C) & !is.na(Level.m)),
+            aes( x = Time, y = Temp.C), colour = 'black') +
+  ggtitle(t1$River.Name[t1$River.Name == "Highlands River"])
+
+# ## Char brook level compared to other Char Brook
+# ggplot() +
+#   geom_line(data = t1 |> 
+#               filter(Station == "Char Brook" & Recording == "Level") |> 
+#               filter(!is.na(Temp.C) & !is.na(Level.m)),
+#             aes( x = Time, y = Level.m*30), colour = 'red') +
+#   geom_line(data = t1 |> filter(Station == "Char Brook" & Recording == "Level") |> 
+#               filter(!is.na(Temp.C) & !is.na(Level.m)),
+#             aes( x = Time, y = Temp.C), colour = 'black') +
+#   ggtitle(t1$Station[t1$Station == "Char Brook" & t1$Recording == "Level"])
+
+
+## Salmonier level compared to other Salmonier
+ggplot() +
+  geom_line(data = t1 |> 
+              filter(River.Name == "Salmonier River" & Recording == "Level") |> 
+              filter(!is.na(Temp.C) & !is.na(Level.m)),
+            aes( x = Time, y = Level.m*30), colour = 'red')+
+  geom_line(data = t1 |> filter(River.Name == "Salmonier River" & Recording == "Level") |> 
+              filter(!is.na(Temp.C) & !is.na(Level.m)),
+            aes( x = Time, y = Temp.C), colour = 'black') +
+  geom_line(data = t1 |> filter(River.Name == "Salmonier River" & Recording == "Water"),
+            aes( x= Time, y = Temp.C, colour = Logger.Type)) +
+  ggtitle(t1$River.Name[t1$River.Name == "Salmonier River"])
+
+
+## Salmon Cove level compared to other Salmon Cove
+ggplot() +
+  geom_line(data = t1 |> 
+              filter(River.Name == "Salmon Cove River, Trinity Bay" & Recording == "Level") |> 
+              filter(!is.na(Temp.C) & !is.na(Level.m)),
+            aes( x = Time, y = Level.m*30), colour = 'red')+
+  geom_line(data = t1 |> filter(River.Name == "Salmon Cove River, Trinity Bay" & Recording == "Level") |> 
+              filter(!is.na(Temp.C) & !is.na(Level.m)),
+            aes( x = Time, y = Temp.C), colour = 'black') +
+  geom_line(data = t1 |> filter(River.Name == "Salmon Cove River, Trinity Bay" & Recording == "Water"),
+            aes( x= Time, y = Temp.C, colour = Logger.Type)) +
+  ggtitle(t1$River.Name[t1$River.Name == "Salmon Cove River, Trinity Bay"])
+
+
+## Renews level compared to other Renews
+ggplot() +
+  geom_line(data = t1 |> 
+              filter(River.Name == "Renews River" & Recording == "Level") |> 
+              filter(!is.na(Temp.C) & !is.na(Level.m)),
+            aes( x = Time, y = Level.m*30), colour = 'red')+
+  geom_line(data = t1 |> filter(River.Name == "Renews River" & Recording == "Level") |> 
+              filter(!is.na(Temp.C) & !is.na(Level.m)),
+            aes( x = Time, y = Temp.C), colour = 'black') +
+  geom_line(data = t1 |> filter(River.Name == "Renews River" & Recording == "Water"),
+            aes( x= Time, y = Temp.C, colour = Logger.Type)) +
+  ggtitle(t1$River.Name[t1$River.Name == "Renews River"])
+
+
+```
+
+```{r water level filter, eval = FALSE}
+
+t2.1 <- t1 |>
+  filter(Recording != "Air") |>
+  # filter(Temp.C >= -1 | is.na(Temp.C)) |>
+  # filter(!is.na(Temp.C)) |>
+  mutate(out.of.water = 0,
+         out.of.water = replace(out.of.water, Level.m <0, 1)) 
+
+t2.2 <- t1 |> 
+  filter(Recording == "Air") |> 
+  mutate(out.of.water = NA)
+
+t2 <- bind_rows(t2.1, t2.2)
+
+# t2 <- t2.2
+# create dataframe with the river and out of water dates and pair with loggers on that river (already verified loggers are consistent)
+
+## will verify logger consistency more once statsitics course is complete
+
+OUT <- t2 |>
+  filter(out.of.water == 1) |>
+  dplyr::select(Time, Station, out.of.water) |>
+  rename(out.of.water2 = out.of.water)
+
+# list of stations that come out of water
+OUT1 <- t2 |>
+  filter(out.of.water == 1) |>
+  distinct(Station)
+
+# time when out of water vs in water
+OUT2 <- t2 |> filter(Station %in% OUT1$Station) |>
+  filter(Recording == "Level") |>
+  mutate(out.of.water = replace(out.of.water, is.na(out.of.water), 0)) |>
+  group_by(Station) |>
+  arrange(Time) |>
+  ## create block based on each time it switches from in to out of water
+  mutate(change = out.of.water - lag(out.of.water),
+         change = replace(change, is.na(change) | change!= 0, 1)) |>
+  mutate(group = cumsum(change)) |>
+  ungroup() |>
+  mutate(out.of.water2 = out.of.water,
+         out.of.water2 = replace(out.of.water2, out.of.water2 == 0, NA)) |>
+  ## group by station and group to calculate min and max time of each
+  group_by(Station, group) |>
+  filter(Time == min(Time) | Time == max(Time)) |>
+  ## format Time for rolling join
+  mutate(Time1 = Time,
+         Time1 = replace(Time1, Time == max(Time), NA),
+         Time2 = Time,
+         Time2 = replace(Time2, Time == min(Time), NA)) |>
+  ## merge time 1 and time 2 to the same row
+  mutate(Time2 = lead(Time2)) |>
+  filter(!is.na(Time1) & !is.na(Time2)) |>
+  ## select columns for the next join
+  dplyr::select(Station, out.of.water2, group, Time1, Time2) |>
+  ungroup()
+
+# merge for only stations with level data
+t3 <- t2 |>
+  left_join(OUT2, join_by(Station, between(Time, Time1, Time2)), unmatched = "error") |>
+  mutate(out.of.water = coalesce(out.of.water, out.of.water2),
+         out.of.water = replace(out.of.water, is.na(out.of.water), 0),
+         out.of.water = replace(out.of.water, Recording == "Air", NA)) |>
+  dplyr::select(-out.of.water2) |>
+  dplyr::select(1:21)
+
+
+```
+
+```{r filter check 2, warning = FALSE, echo = FALSE, eval = FALSE}
+
+SNlist <- unique(t1$Serial)
+
+for (i in seq_along(SNlist)) {
+  p1 <- t1 |> 
+    filter(Serial == SNlist[i]) |> 
+    filter(!is.na(Temp.C)) |> 
+    ggplot() +
+    geom_point(aes(x = Time, y = Temp.C)) +
+    ggtitle(paste(t1$Recording[t1$Serial==SNlist[i]], SNlist[i], t1$Station[t1$Serial == SNlist[i]])) +
+    ylim(min(t1$Temp.C[t1$Serial == SNlist[i]], na.rm = TRUE),
+         max(t1$Temp.C[t1$Serial == SNlist[i]], na.rm = TRUE)) +
+    xlim(min(t1$Time[t1$Serial == SNlist[i]], na.rm = TRUE),
+         max(t1$Time[t1$Serial == SNlist[i]], na.rm = TRUE))
+  p2 <- t2 |> 
+    filter(Serial == SNlist[i]) |> 
+    filter(!is.na(Temp.C)) |> 
+    ggplot() +
+    geom_point(aes(x = Time, y = Temp.C)) +
+    ggtitle(paste(t1$Recording[t1$Serial==SNlist[i]], SNlist[i], t1$Station[t1$Serial == SNlist[i]])) +
+    ylim(min(t1$Temp.C[t1$Serial == SNlist[i]], na.rm = TRUE),
+         max(t1$Temp.C[t1$Serial == SNlist[i]], na.rm = TRUE)) +
+    xlim(min(t1$Time[t1$Serial == SNlist[i]], na.rm = TRUE),
+         max(t1$Time[t1$Serial == SNlist[i]], na.rm = TRUE))
+  p3 <- t3 |> 
+    filter(Serial == SNlist[i]) |> 
+    # filter(!is.na(Temp.C)) |> 
+    ggplot() +
+    geom_point(aes(x = Time, y = Temp.C, colour = as.character(out.of.water))) +
+    ggtitle(paste(t3$Recording[t3$Serial==SNlist[i]], SNlist[i], t3$Station[t3$Serial==SNlist[i]]))  +
+    ylim(min(t1$Temp.C[t1$Serial == SNlist[i]], na.rm = TRUE),
+         max(t1$Temp.C[t1$Serial == SNlist[i]], na.rm = TRUE)) +
+    xlim(min(t1$Time[t1$Serial == SNlist[i]], na.rm = TRUE),
+         max(t1$Time[t1$Serial == SNlist[i]], na.rm = TRUE)) +
+    scale_color_manual(values = c("black", "red")) +
+    theme(legend.position = "bottom")
+  
+  p <- ggarrange(p1, p2, p3, nrow = 1)
+  print(p)
+  
+}
+```
+
+```{r filter check 3, warning = FALSE, echo = FALSE, eval = FALSE}
+## Rivers with level data only
+t3_1 <- t3 |> filter(out.of.water == 1)
+SNlist <- unique(t3_1$Serial)
+
+for (i in seq_along(SNlist)) {
+  p1 <- t2 |> 
+    filter(Serial == SNlist[i]) |> 
+    filter(!is.na(Temp.C)) |> 
+    ggplot() +
+    geom_point(aes(x = Time, y = Temp.C)) +
+    ggtitle(paste(t2$Recording[t2$Serial==SNlist[i]], SNlist[i], t2$Station[t2$Serial == SNlist[i]])) +
+    ylim(min(t2$Temp.C[t2$Serial == SNlist[i]], na.rm = TRUE),
+         max(t2$Temp.C[t2$Serial == SNlist[i]], na.rm = TRUE)) +
+    xlim(min(t2$Time[t2$Serial == SNlist[i]], na.rm = TRUE),
+         max(t2$Time[t2$Serial == SNlist[i]], na.rm = TRUE))
+  p3 <- t3 |> 
+    filter(Serial == SNlist[i]) |> 
+    # filter(!is.na(Temp.C)) |> 
+    ggplot() +
+    geom_point(aes(x = Time, y = Temp.C, colour = as.character(out.of.water))) +
+    ggtitle(paste(t3$Recording[t3$Serial==SNlist[i]], SNlist[i], t3$Station[t3$Serial==SNlist[i]]))  +
+    ylim(min(t2$Temp.C[t2$Serial == SNlist[i]], na.rm = TRUE),
+         max(t2$Temp.C[t2$Serial == SNlist[i]], na.rm = TRUE)) +
+    xlim(min(t2$Time[t2$Serial == SNlist[i]], na.rm = TRUE),
+         max(t2$Time[t2$Serial == SNlist[i]], na.rm = TRUE)) +
+    scale_color_manual(values = c("black", "red")) +
+    theme(legend.position = "bottom")
+  
+  p <- ggarrange(p1, p3, nrow = 1)
+  print(p)
+  
+}
+```
+
+```{r 2022/2023, echo = FALSE}
+# 
+# 
+# ### check timezone and set to utc
+# TZs <- read.csv("./data-working/output/2023-timezones.csv") |> 
+#   mutate(TZ = str_remove(TZ, pattern = "Minilog Initialized: "))
+# 
+# ### All TZs are UTC-2.5 or NDT
+# 
+# t3.TZ <- t3 |> 
+#   mutate(Time.UTC = Time + dhours(2.5),
+#          Time.UTC = with_tz(Time.UTC, tzone = 'UTC'))
+
+
+
+```
+
+
+```{r write data}
+
+tfinal <- t1 |> # would generally finish with t2 or t3 if you have level logger data available
+  rename(Date.Time = Time) |> 
+  mutate(Date = date(Date.Time),
+         Time = format(as.POSIXct(Date.Time, tzone = "America/St_Johns"), format = "%H:%M:%S"),
+         Time.deployed = format(as.POSIXct(Time.deployed), format = "%H:%M:%S")) |> 
+  mutate(Time.UTC = with_tz(Date.Time, tzone = "UTC")) |> 
+  mutate(Date.UTC = date(Time.UTC),
+         Time.UTC = format(as.POSIXct(Time.UTC), format = "%H:%M:%S")) |> 
+  ## add out of water column
+  mutate(out.of.water = 0,
+         out.of.water = replace(out.of.water, Recording == "Air", NA),
+         out.of.water = replace(out.of.water, Temp.C <= -1, 1))
+
+write.csv(tfinal, "./data-working/output/logger-data-2024-combined.csv", row.names = FALSE)
+
+```
+
+

@@ -1,0 +1,320 @@
+---
+title: "2024 partner logger data QC"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = 'C:/Users/Geissingere/Documents/Projects/Temperature-Project/')
+library(tidyverse)
+library(lubridate)
+library(ggpubr)
+```
+
+```{r raw data}
+## ---- data -----
+temperature <- read.csv("./data-working/output/partner-logger-data-2024-full.csv") |> 
+  ## format datetime
+  mutate(Time = mdy_hms(Time)) |> 
+  ## format date column
+  mutate(Date = date(Time)) |> 
+  ## create a year only column
+  mutate(Year = year(Date))
+
+## 
+past22 <- read.csv("./data-working/output/compiled-water-temperature-2014to2022.csv") |> 
+  mutate(Date.UTC = ymd(Date.UTC),
+         Time.UTC = ymd_hms(paste(Date.UTC, Time.UTC, tz = "UTC"))) |> 
+  dplyr::select(Time.UTC, Temp.C, Recording, Serial)
+past23 <- read.csv("./data-working/output/compiled-water-temperature-2023.csv") |> 
+  mutate(Date.UTC = ymd(Date.UTC),
+         Time.UTC = ymd_hms(paste(Date.UTC, Time.UTC, tz = "UTC"))) |> 
+  dplyr::select(Time.UTC, Temp.C, Recording, Serial)
+past24 <- read.csv("./data-working/output/compiled-water-temperature-2024.csv") |> 
+  mutate(Date.UTC = ymd(Date.UTC),
+         Time.UTC = ymd_hms(paste(Date.UTC, Time.UTC, tz = "UTC"))) |> 
+  dplyr::select(Time.UTC, Temp.C, Recording, Serial) |> 
+  mutate(Serial = as.integer(Serial)) |> 
+  filter(!is.na(Serial))
+
+past <- bind_rows(past22, past23, past24) |> 
+  mutate(Time = with_tz(Time.UTC, tzone = "America/St_Johns")) |> 
+  distinct()
+
+ 
+```
+
+```{r previously downloaded data by serial and dates}
+past.loggers <- temperature |> 
+  filter(Serial %in% past$Serial)
+
+past.loggers2 <- past.loggers |> 
+  group_by(Station, Serial) |> 
+  filter(Time == max(Time)) |> 
+  ungroup() |> 
+  distinct(Serial, Time) |> 
+  rename(Data.Date = Time) 
+
+temperature <- temperature |> 
+  left_join(past.loggers2)
+
+
+```
+
+
+```{r date filter}
+## ---- filter data based on deployment time -----
+
+# filter data based on last upload
+t1.1 <- temperature |> 
+  filter(!is.na(Data.Date)) |> 
+  filter(Time >= Data.Date) |> 
+  mutate(grouping = "Group 1")
+
+
+## without deployment times
+t1.3 <- temperature |>
+  filter(is.na(Data.Date)) |> 
+  group_by(Serial) |>
+  mutate(row = seq(1:n())) |>
+  ungroup() |>
+  ## remove first 168 hours (7 days)
+  filter(row > 168) |>
+  dplyr::select(-row) |> 
+  mutate(grouping = "Group 3")
+## 13
+
+t1 <- bind_rows(t1.1, t1.3)
+
+```
+
+```{r filter check 1, warning = FALSE, echo = FALSE}
+## check differences
+checkdiff <- anti_join(temperature, t1)
+
+nrow(t1) + nrow(checkdiff) == nrow(temperature)
+
+SNlist <- unique(temperature$Serial)
+
+for (i in seq_along(SNlist)) {
+  p1 <- temperature |> 
+    filter(Serial == SNlist[i]) |> 
+    filter(!is.na(Temp.C)) |> 
+    ggplot() +
+    geom_point(aes(x = Time, y = Temp.C)) +
+    ggtitle(paste(t1$grouping[t1$Serial == SNlist[i]], "Raw: ", SNlist[i])) +
+    ylim(min(temperature$Temp.C[temperature$Serial == SNlist[i]], na.rm = TRUE),
+         max(temperature$Temp.C[temperature$Serial == SNlist[i]], na.rm = TRUE)) +
+    xlim(min(temperature$Time[temperature$Serial == SNlist[i]], na.rm = TRUE),
+         max(temperature$Time[temperature$Serial == SNlist[i]], na.rm = TRUE))
+  p2 <- checkdiff |> 
+    filter(Serial == SNlist[i]) |> 
+    filter(!is.na(Temp.C)) |> 
+    ggplot() +
+    geom_point(aes(x = Time, y = Temp.C)) +
+    ggtitle(paste(t1$grouping[t1$Serial == SNlist[i]], "Removed: ", SNlist[i])) +
+    ylim(min(temperature$Temp.C[temperature$Serial == SNlist[i]], na.rm = TRUE),
+         max(temperature$Temp.C[temperature$Serial == SNlist[i]], na.rm = TRUE)) +
+    xlim(min(temperature$Time[temperature$Serial == SNlist[i]], na.rm = TRUE),
+         max(temperature$Time[temperature$Serial == SNlist[i]], na.rm = TRUE))
+  p3 <- t1 |> 
+    filter(Serial == SNlist[i]) |> 
+    filter(!is.na(Temp.C)) |> 
+    ggplot() +
+    geom_point(aes(x = Time, y = Temp.C)) +
+    ggtitle(paste(t1$grouping[t1$Serial == SNlist[i]], "Retained: ", SNlist[i])) +
+    ylim(min(temperature$Temp.C[temperature$Serial == SNlist[i]], na.rm = TRUE),
+         max(temperature$Temp.C[temperature$Serial == SNlist[i]], na.rm = TRUE)) +
+    xlim(min(temperature$Time[temperature$Serial == SNlist[i]], na.rm = TRUE),
+         max(temperature$Time[temperature$Serial == SNlist[i]], na.rm = TRUE))
+  
+  p <- ggarrange(p1, p2, p3, nrow = 1)
+  print(p)
+  
+}
+```
+
+
+```{r water level filter}
+
+full <- t1 |>
+  filter(Temp.C >= -1 | is.na(Temp.C)) |>
+  filter(!is.na(Temp.C)) |>
+  # mutate(out.of.water = NA,
+  #        out.of.water = replace(out.of.water, Level.m <0, 1)) |> 
+    mutate(out.of.water = 0) |> 
+  distinct()
+
+
+```
+
+```{r temp filter, warning = FALSE}
+remove <- c(21022452, 20542211, 20542205, 21022453, 212336059)
+
+removeafter <- data.frame(Serial = 21290091,
+                      cutoff = "2024-09-14 09:00:00") |>  ## grey river
+  ## Traverse Brook
+  add_row(Serial = 21159034,
+          cutoff = "2024-08-05 12:00:00") |> 
+  mutate(cutoff = ymd_hms(cutoff)) |>
+    # mutate(Serial = as.character(Serial)) |>
+  mutate(state = "not deployed")
+
+
+
+remove1 <- full |>
+  filter(Serial %in% removeafter$Serial) |>
+  left_join(removeafter) |>
+  mutate(remove = Time >= cutoff) |>
+  filter(remove == TRUE)
+
+removebefore <- data.frame(Serial = 21290091,
+                           cutoff = "2022-10-03 12:00:00") |>   # Grey River
+ ## Eagle River
+  add_row(Serial = 21233605,
+          cutoff = "2024-06-15 10:00:00") |> 
+  ## Sandhill River
+  add_row(Serial = 21158022,
+          cutoff = "2024-06-17 20:00:00") |> 
+  ## Lomond
+  add_row(Serial = 21042576,
+          cutoff = "2023-06-10 16:00:00") |> 
+  ## NE Placentia
+  add_row(Serial = 21159047,
+          cutoff = "2023-06-24 14:00:00") |> 
+  ## North Arm
+  add_row(Serial = 21041956,
+          cutoff = "2023-06-25 06:00:00") |> 
+  ## char brook
+  add_row(Serial = 21031904,
+          cutoff = "2023-08-25 10:00:00") |> 
+  ## hunt river
+  add_row(Serial = 21031927,
+          cutoff = "2021-08-01 00:00:00") |> 
+  # Terra nova
+  add_row(Serial = 21731967,
+          cutoff = "2024-06-28 14:00:00") |> 
+  ## St. Lewis
+  add_row(Serial = 21210580,
+          cutoff = "2022-10-05 15:00:00") |> 
+  mutate(cutoff = ymd_hms(cutoff)) |> 
+  mutate(state = "not deployed") 
+
+## before
+remove2 <- full |>
+  filter(Serial %in% removebefore$Serial) |>
+  left_join(removebefore) |>
+  mutate(remove = Time <= cutoff) |>
+  filter(remove == TRUE)
+
+removechunk <- data.frame(Serial = 21159034,
+          Start = "2023-07-26 13:00:00",
+          Stop = "2023-08-02 00:00:00") |>   ## traverse brook
+  ## st. lewis river
+  add_row(Serial = 21210580,
+          Start = "2023-07-15 11:00:00",
+          Stop = "2023-07-24 05:00:00") |>
+  ## st lewis river 2
+  add_row(Serial = 21618878,
+          Start = "2024-07-07 20:00:00",
+          Stop = "2024-07-11 23:00:00") |> 
+  mutate(Start = ymd_hms(Start),
+         Stop = ymd_hms(Stop))
+
+## chunk
+remove3 <- full |>
+  filter(Serial %in% removechunk$Serial) |>
+  left_join(removechunk) |>
+  # mutate(remove = FALSE,
+  #        remove = replace(remove, Time > Start & Time < Stop, TRUE))
+  mutate(remove1 = Time >= Start,
+         remove2 = Time <= Stop) |>
+  mutate(remove = remove1==remove2) |>
+  filter(remove == TRUE) |>
+  dplyr::select(-remove1, -remove2) |>
+  mutate(state = "out of water")
+
+
+RemoveAll <- bind_rows(remove1, remove2, remove3) |>
+  mutate(keep = 0)
+
+full2 <- full |>
+  filter(!Serial %in% remove) |>
+  # mutate(Serial = as.integer(Serial)) |>
+  left_join(RemoveAll) |>
+  mutate(keep = replace(keep, is.na(keep), 1)) |>
+  # filter(state != "not deployed") |> 
+  mutate(out.of.water = replace(out.of.water, state == "out of water", 2),
+         Temp.C = replace(Temp.C, state == "not deployed", NA)) |> 
+  mutate(out.of.water = factor(out.of.water)) |> 
+  ## remove additional out of waters
+  mutate(out.of.water = replace(out.of.water, Serial == 21158022 & Temp.C >24, 2),
+         out.of.water = replace(out.of.water, Serial == 21358520 & Temp.C > 25, 2))
+
+# full2 <- full
+
+```
+
+```{r temperature figs, echo = FALSE, warning=FALSE, message = FALSE}
+## 
+SNlist <- unique(full2$Serial)
+
+for (i in seq_along(SNlist)) {
+  p <- full2 |> 
+    filter(Serial == SNlist[i]) |> 
+    filter(!is.na(Temp.C)) |> 
+    ggplot() +
+    geom_point(aes(x = Time, y = Temp.C, colour = as.character(out.of.water))) +
+    ggtitle(paste(full$Recording[full$Serial==SNlist[i]], SNlist[i], full$Station[full$Serial == SNlist[i]])) +
+    scale_color_manual(values = c("black", "red", "green", "blue")) +
+    theme(legend.position = "bottom") +
+    scale_x_datetime(date_labels = "%d-%b-%y")
+  
+  print(p)
+  
+}
+
+```
+
+### Loggers removed from data 
+
+
+```{r removed temperature figs, echo = FALSE, warning=FALSE, message = FALSE}
+##
+SNlist <- remove
+
+for (i in seq_along(SNlist)) {
+  p <- full |>
+    filter(Serial == SNlist[i]) |>
+    filter(!is.na(Temp.C)) |>
+    ggplot() +
+    geom_point(aes(x = Time, y = Temp.C, colour = as.character(out.of.water))) +
+    ggtitle(paste(full$Recording[full$Serial==SNlist[i]], SNlist[i], full$Station[full$Serial == SNlist[i]])) +
+    scale_color_manual(values = c("black", "red", "green")) +
+    theme(legend.position = "bottom") +
+    scale_x_datetime(date_labels = "%d-%b-%y")
+
+  print(p)
+
+}
+
+```
+
+
+
+```{r write data}
+
+tfinal <- full2 |> 
+  rename(Date.Time = Time) |> 
+  mutate(Date = date(Date.Time),
+         Time = format(as.POSIXct(Date.Time, tzone = "America/St_Johns"), format = "%H:%M:%S")) |> 
+  mutate(Time.UTC = with_tz(Date.Time, tzone = "UTC")) |> 
+  mutate(Date.UTC = date(Time.UTC),
+         Time.UTC = format(as.POSIXct(Time.UTC), format = "%H:%M:%S"))
+
+write.csv(tfinal, "./data-working/output/compiled-partner-data-2024.csv", row.names = FALSE)
+
+```
+
+

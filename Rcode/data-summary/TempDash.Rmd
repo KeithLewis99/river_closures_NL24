@@ -1,0 +1,178 @@
+---
+title: "2023 Temperature Summary"
+output: flexdashboard::flex_dashboard
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = 'C:/Users/Geissingere/Documents/Projects/Temperature-Project')
+library(tidyverse)
+library(lubridate)
+library(plotly)
+library(leaflet)
+# library(kableExtra)
+library(DT)
+```
+
+```{r load summary data, echo = FALSE}
+source("./Rcode/data-summary/summary-stats.R")
+
+```
+
+
+
+```{r data vis crosstalk prep, echo = FALSE}
+
+library(crosstalk)
+
+# daily_river_2022 <- daily_river |>
+#   filter(year == 2022) |>
+#   mutate(month = month(Date)) |>
+#   mutate(day = day(Date)) |>
+#   mutate(Month = month(Date, abbr = TRUE, label = TRUE) ) |>
+#   filter(month == 6 | month == 7 | month == 8 | month  == 9) |>
+#   mutate(Day.Num = yday(Date) - min(yday(Date)) + 1) |>
+#   group_by(River.Name) |>
+#   complete(Date = seq.Date(min(Date), max(Date), by = "1 day")) |>
+#   ungroup()
+
+
+daily_river_2023 <- daily_river |>
+  filter(year == 2023) |>
+  mutate(month = month(Date)) |>
+  mutate(day = day(Date)) |>
+  mutate(Month = month(Date, abbr = TRUE, label = TRUE) ) |>
+  filter(month == 6 | month == 7 | month == 8 | month  == 9) |> 
+  mutate(Day.Num = yday(Date) - min(yday(Date)) + 1) |>  group_by(River.Name) |> 
+  complete(Date = seq.Date(min(Date), max(Date), by = "1 day")) |> 
+  ungroup()
+
+
+
+
+# shared_daily22 <- SharedData$new(daily_river_2022, ~River.Name)
+shared_daily23 <- SharedData$new(daily_river_2023, ~River.Name)
+
+
+### add SF areas to the check marks
+```
+
+
+
+Column {data-width=200}
+---------------------------------------
+
+
+```{r filter box, echo = FALSE}
+filter_select(id = "sfa", sharedData = shared_daily23, group= ~SFA, label = "Select SFA", multiple = TRUE)
+
+filter_select(id = "river", sharedData = shared_daily23, group= ~River.Name, label = "Select River", multiple = TRUE)
+
+filter_checkbox(id = "month", sharedData = shared_daily23, group= ~month, label = "Select month")
+
+
+```
+
+
+Column {.tabset}
+------------------------------------------
+### Mean Water temperature
+
+```{r mean temperature, echo = FALSE}
+
+# p1 <- plot_ly(data = shared_daily22,
+#         x = ~Date,
+#         y = ~Mean_Temp,
+#         color = ~River.Name,
+#         type = "scatter", mode = "lines",
+#         opacity = .8)
+plot_ly(data = shared_daily23,
+        x = ~Date,
+        y = ~Mean_Temp,
+        color = ~River.Name,
+        type = "scatter", mode = "lines",
+        opacity = .8)
+
+# subplot(p1, p2, shareX = TRUE, shareY = TRUE)
+
+```
+
+### Max Water temperature
+```{r max temperature, echo = FALSE}
+
+# p3 <- plot_ly(data = shared_daily22,
+#         x = ~Date,
+#         y = ~Max,
+#         color = ~River.Name,
+#         type = "scatter", mode = "lines",
+#         opacity = .8)
+
+plot_ly(data = shared_daily23,
+        x = ~Date,
+        y = ~Max,
+        color = ~River.Name,
+        type = "scatter", mode = "lines",
+        opacity = .8)
+
+# subplot(p3, p4, shareX = TRUE, shareY = TRUE)
+
+```
+
+### Min Water temperature
+```{r min temperature, echo = FALSE}
+
+# p5 <- plot_ly(data = shared_daily22,
+#         x = ~Date,
+#         y = ~Min,
+#         color = ~River.Name,
+#         type = "scatter", mode = "lines",
+#         opacity = .8)
+
+plot_ly(data = shared_daily23,
+        x = ~Date,
+        y = ~Min,
+        color = ~River.Name,
+        type = "scatter", mode = "lines",
+        opacity = .8)
+
+# subplot(p5, p6, shareX = TRUE, shareY = TRUE)
+```
+
+### Summary Table
+```{r table, echo = FALSE}
+
+datatable(sfa1 |> filter(Year == 2023))
+```
+
+
+### July River Temperatures
+```{r table 2, echo = FALSE}
+datatable(daily_river_2023 |> 
+  mutate(above20 = 0,
+         above20 = replace(above20, Min > 20, 1)) |>
+  group_by(River.Number, River.Name, month) |> 
+  summarise(Mean = round(mean(Mean_Temp),2),
+            SD = round(sd(Mean_Temp),2),
+            DaysAbove = sum(above20)) |> 
+  ungroup() |> 
+  filter(month == 7) |> 
+  dplyr::select(-month) |> 
+  arrange(desc(Mean)))
+```
+
+
+### August River Temperatures
+```{r table 3, echo = FALSE}
+datatable(daily_river_2023 |> 
+  mutate(above20 = 0,
+         above20 = replace(above20, Min > 20, 1)) |>
+  group_by(River.Number, River.Name, month) |> 
+  summarise(Mean = mean(Mean_Temp),
+            SD = sd(Mean_Temp),
+            DaysAbove = sum(above20)) |> 
+  ungroup() |> 
+  filter(month == 8) |> 
+  dplyr::select(-month) |> 
+  arrange(desc(Mean)))
+```

@@ -1,0 +1,258 @@
+---
+title: "Data-Exploration"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = 'C:/Users/Geissingere/Documents/Projects/Temperature-Project')
+options(knitr.kable.NA = '')
+
+library(tidyverse)
+library(lubridate)
+library(knitr)
+# library(pandoc)
+# library(kableExtra)
+library(ggpubr)
+library(leaflet)
+
+```
+
+```{r data setup, message = FALSE, echo = FALSE, warning = FALSE}
+# ---- Upload station data ----
+# rivers by sfa
+sfas <- read.csv("./data-working/loggerSFAs.csv") |> 
+  dplyr::select(-name)
+
+# station data
+loggers <- read.csv( "./data-working/Terra Nova Temperature Logger Folders/24-0414TempLoggerSummary.csv",
+                         header = TRUE) |>
+  rename(Station = "Logger.No....Location",
+         Serial = "ID..",
+         Deployed = Placed,
+         Download2022 = X1st.Retrieval,
+         Download2023 = X2nd.Retrieval) |>
+  dplyr::select(-X3rd.Retrieval) |> 
+  ## format columns
+  separate(Coordinates, into = c("Lat", "Long"), sep = " ") |> 
+  mutate(RiverCode = str_sub(Station, start = 1, end = 2)) |> 
+  mutate(River = "Terra Nova River",
+         River = replace(River, RiverCode == "GR", "Gambo River"),
+         River = replace(River, RiverCode == "MB", "Middle Brook"),
+         River = replace(River, RiverCode == "NW", "Northwest Brook, Alexander Bay")) |> 
+  mutate(Deployed = mdy(Deployed),
+         Download2022 = mdy(Download2022),
+         Download2023 = mdy(Download2023)) |> 
+  mutate(Lat = as.numeric(Lat),
+         Long = as.numeric(Long)) |> 
+  left_join(sfas, join_by(River == River.Name)) |> 
+  distinct() |> 
+  mutate(Recording = "Water",
+         Recording = replace(Recording, Serial %in% c(21290096, 21401693, 21159036, 21401684, 21401681), "Air"))
+
+
+full <- read.csv("./data-working/output/TNlogger-data-2023-cleaned.csv") |> 
+  distinct() |> 
+  mutate(Time = ymd_hms(paste(Date,Time.UTC))) |> 
+  dplyr::select(-Date.Time) |> 
+  mutate(Date = ymd(Date))
+
+water <- full |> 
+  filter(Recording != "Air")
+
+```
+
+```{r temp filter, warning = FALSE}
+remove <- c(21051045, 21158063, 21158030, 21158043, 21158085, 21290090, 21371789, 21371806, 21401691)
+
+removeafter <- data.frame(Serial = c(21194849),
+                      cutoff = c("2022-08-12 13:30:00")) |>
+  mutate(cutoff = ymd_hms(cutoff)) 
+  
+
+  
+remove1 <- full |>
+  filter(Serial %in% removeafter$Serial) |>
+  left_join(removeafter) |>
+  mutate(remove = Time >= cutoff) |>
+  filter(remove == TRUE) |> 
+  mutate(state = "out of water")
+
+removebefore <- data.frame(Serial = 21371789,
+                           cutoff = "2022-07-06 16:18:43") |> 
+  add_row(Serial = 21371796,
+          cutoff = "2022-07-06 05:33:20") |> 
+  add_row(Serial = 21041979,
+          cutoff = "2022-07-05 15:33:20") |> 
+  add_row(Serial = 21050855,
+          cutoff = "2022-07-04 02:19:29") |> 
+  add_row(Serial = 21158016,
+          cutoff = "2022-07-06 04:00:09") |> 
+  add_row(Serial = 21158030,
+          cutoff = "2022-07-06 4:02:24") |>
+  add_row(Serial = 21158073,
+          cutoff = "2022-06-27 14:30:00") |> 
+  add_row(Serial = 21159044,
+          cutoff = "2022-07-15 10:41:28") |> 
+  add_row(Serial = 21290105,
+          cutoff = "2022-09-12 20:30:00") |>
+  add_row(Serial = 21371796,
+          cutoff = "2022-07-12 18:42:08") |> 
+  add_row(Serial = 21371803,
+          cutoff = "2022-08-04 11:00:23") |> 
+  add_row(Serial = 21371796,
+          cutoff = "2022-08-04 10:01:16") |> 
+  add_row(Serial = 21371805,
+          cutoff = "2022-08-21 10:30:00") |> 
+  mutate(cutoff = ymd_hms(cutoff))
+
+## before
+remove2 <- full |>
+  filter(Serial %in% removebefore$Serial) |>
+  left_join(removebefore) |>
+  mutate(remove = Time <= cutoff) |>
+  filter(remove == TRUE) |> 
+  mutate(state = "not deployed")
+
+removechunk <- data.frame(Serial = 21158083,
+                          Start = "2022-06-27 14:30:00",
+                          Stop = "2022-06-27 22:30:00") |>
+  add_row(Serial = 21158083,
+          Start = "2022-07-02 11:30:00",
+          Stop = "2022-07-02 17:30:00") |>
+  
+    add_row(Serial = 21158083,
+          Start = "2022-07-21 20:30:00",
+          Stop = "2022-07-23 03:30:00") |>
+  
+    add_row(Serial = 21158083,
+          Start = "2022-08-24 16:30:00",
+          Stop = "2022-08-25 17:30:00") |>
+  
+    add_row(Serial = 21158083,
+          Start = "2022-09-07 23:30:00",
+          Stop = "2022-09-10 02:30:00") |>
+  mutate(Start = ymd_hms(Start),
+         Stop = ymd_hms(Stop))
+ 
+# chunk
+remove3 <- full |>
+  filter(Serial %in% removechunk$Serial) |>
+  left_join(removechunk) |>
+  mutate(remove = FALSE,
+         remove = replace(remove, Time > Start & Time < Stop, TRUE)) |> 
+  mutate(remove1 = Time >= Start,
+         remove2 = Time <= Stop) |>
+  mutate(remove = remove1==remove2) |>
+  filter(remove == TRUE) |>
+  dplyr::select(-remove1, -remove2) |>
+  mutate(state = "out of water")
+
+
+RemoveAll <- bind_rows(remove1, remove2, remove3) |>
+  mutate(keep = 0)
+
+full2 <- full |>
+  mutate(Serial = as.character(Serial)) |>
+  filter(!Serial %in% remove) |>
+  mutate(Serial = as.integer(Serial)) |>
+  left_join(RemoveAll) |>
+  ## remove crazy outlier from gambo rotary park
+  # mutate(Temp.C = replace(Temp.C, Temp.C > 40 & Station == "Middle Brook (Gambo Rotary Park)" & Recording == "Water", NA)) |>
+  mutate(keep = replace(keep, is.na(keep), 1)) |>
+  mutate(out.of.water = 0) |> 
+    ## remove outliers
+  mutate(out.of.water = replace(out.of.water, Temp.C > 30 & Serial == 21159049, "out of water"),
+         keep = replace(keep, Temp.C > 30 & Serial == 21159049, 0)) |> 
+  mutate(out.of.water = replace(out.of.water, state == "out of water", 1)) |>
+  mutate(out.of.water = replace(out.of.water, state == "not deployed", 2)) |> 
+  mutate(out.of.water = factor(out.of.water))
+
+# full2 <- full
+
+```
+
+```{r temperature figs, echo = FALSE, warning=FALSE, message = FALSE}
+## 
+SNlist <- unique(full2$Serial)
+
+for (i in seq_along(SNlist)) {
+  p <- full2 |> 
+    filter(Serial == SNlist[i]) |> 
+    filter(!is.na(Temp.C)) |> 
+    ggplot() +
+    geom_point(aes(x = Time, y = Temp.C, colour = out.of.water)) +
+    ggtitle(paste(full$Recording[full$Serial==SNlist[i]], SNlist[i], full$Station[full$Serial == SNlist[i]])) +
+    scale_color_manual(values = c("black", "red", "green")) +
+    theme(legend.position = "bottom") +
+    scale_x_datetime(date_labels = "%d-%b-%y")
+  
+  print(p)
+  
+}
+
+```
+
+### Loggers removed from data 
+
+
+```{r removed temperature figs, echo = FALSE, warning=FALSE, message = FALSE}
+##
+SNlist <- remove
+
+for (i in seq_along(SNlist)) {
+  p <- full |>
+    filter(Serial == SNlist[i]) |>
+    filter(!is.na(Temp.C)) |>
+    ggplot() +
+    geom_point(aes(x = Time, y = Temp.C, colour = as.character(out.of.water))) +
+    ggtitle(paste(full$Recording[full$Serial==SNlist[i]], SNlist[i], full$Station[full$Serial == SNlist[i]])) +
+    scale_color_manual(values = c("black", "red", "green")) +
+    theme(legend.position = "bottom") +
+    scale_x_datetime(date_labels = "%d-%b-%y")
+
+  print(p)
+
+}
+
+```
+
+
+```{r temp filter2 }
+
+# water2 <- water |>
+#   mutate(Serial = as.character(Serial)) |>
+#   filter(!Serial %in% remove) |>
+#   mutate(Serial = as.integer(Serial)) |>
+#   left_join(RemoveAll) |>
+#   mutate(keep = replace(keep, is.na(keep), 1)) |>
+#   filter(keep == 1) |>
+#   dplyr::select(-keep)
+# 
+
+
+waterfinal <- water |>
+  mutate(Serial = as.character(Serial)) |>
+  filter(!Serial %in% remove) |>
+  mutate(Serial = as.integer(Serial)) |>
+  left_join(RemoveAll) |>
+  ## remove crazy outlier from gambo rotary park
+  mutate(Temp.C = replace(Temp.C, Temp.C > 40 & Station == "Middle Brook (Gambo Rotary Park)" & Recording == "Water", NA)) |>
+  mutate(keep = replace(keep, is.na(keep), 1)) |>
+  mutate(Temp.C = replace(Temp.C, state == "not deployed", NA),
+         out.of.water = replace(out.of.water, state == "out of water", 2)) |> 
+  mutate(out.of.water = factor(out.of.water)) |> 
+  ## fix shoal harbour lat/long
+  mutate(Long = replace(Long, Station == "Shoal Harbour River (White Hills Resource Road)" & Serial == 357568 & Long == -54.0500 | Long == -54.0494, -54.0496)) |>  
+  dplyr::select(-cutoff, -remove, -state, -Start, -Stop, -keep, -Deployed.by, -Time) |> 
+  distinct()
+
+```
+
+
+```{r save file, eval = FALSE}
+
+write.csv(waterfinal, "./data-working/output/compiled-water-temperature-13Feb2024.csv", row.names = FALSE)
+
+```

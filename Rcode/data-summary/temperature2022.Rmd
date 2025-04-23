@@ -1,0 +1,274 @@
+---
+title: "2022 Temperature Overview: Loggers"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = 'C:/Users/Geissingere/Documents/Projects/Temperature-Project/')
+library(tidyverse)
+library(lubridate)
+library(leaflet)
+```
+
+
+```{r data upload, echo = FALSE}
+loggers <- read.csv("./data-working/output/logger-data-2022-full.csv") |> 
+  separate(Date.Time, into = c("Date", "Time"), sep = " ") |> 
+  mutate(Time = replace(Time, is.na(Time), "00:00:00")) |> 
+  mutate(Date.Time = ymd_hms(paste(Date, Time))) |> 
+  mutate(Date.deployed = mdy(Date.deployed.MDY),
+         Time.deployed = ymd_hm(paste(Date.deployed, Time.deployed)))
+stations <- read.csv( "./data-working/Loggers_2022.csv",
+                     skip = 1,
+                     header = TRUE) |>
+  rename(Logger.Type = "Logger.Type.Note..minilog...level.are.not.bluetooth") |>
+  dplyr::select( River,
+                 Lat, 
+                 Long, 
+                 Date.deployed.MDY, 
+                 Time.deployed, 
+                 Recording,Serial, 
+                 Logger.Type,
+                 Depth.cm, 
+                 Date.Downloaded,
+                 Location.description, 
+                 Deployed.by,
+                 Notes) |>
+  mutate(Lat = as.numeric(Lat),
+         Long = as.numeric(Long),
+         Serial = as.integer(Serial))
+
+stillout <- stations |>
+  filter(!Serial %in% loggers$Serial) |>
+  filter(Logger.Type != "Cellular Station" & Logger.Type != "Wifi Station")
+
+```
+
+Need to add SFAs and river numbers to 2022 data before proceeding
+
+
+
+```{r site map, echo = FALSE}
+leaflet() |>
+  setView(lng = -55.67, lat=48.93, zoom=5 ) |>
+  addTiles() |>
+  addCircleMarkers(data = stillout |> 
+                     distinct(Serial, River, Lat, Long),
+                   color = 'grey',
+                   popup = ~paste0(River,
+                              "<br>SN: ", Serial,
+                              "<br>Lat: ", Lat,
+                              "<br>Long: ", Long),
+                   radius = 5,
+                   stroke = TRUE,
+                   weight = 1,
+                   fillOpacity = .8) |> 
+  addCircleMarkers(data = loggers |> 
+                     filter(Recording == "Water") |> 
+                     distinct(Serial, River, Lat, Long),
+                   color = 'blue',
+                   popup = ~paste0(River,
+                              "<br>SN: ", Serial,
+                              "<br>Lat: ", Lat,
+                              "<br>Long: ", Long),
+                   radius = 5,
+                   stroke = TRUE,
+                   weight = 1,
+                   fillOpacity = .8) |> 
+  addCircleMarkers(data = loggers |> 
+                     filter(Recording == "Air") |> 
+                     distinct(Serial, River, Lat, Long),
+                   color = 'green',
+                   popup = ~paste0(River,
+                              "<br>SN: ", Serial,
+                              "<br>Lat: ", Lat,
+                              "<br>Long: ", Long),
+                   radius = 5,
+                   stroke = TRUE,
+                   weight = 1,
+                   fillOpacity = .8) |> 
+  addCircleMarkers(data = loggers |> 
+                     filter(Recording == "Level") |> 
+                     distinct(Serial, River, Lat, Long),
+                   color = 'purple',
+                   popup = ~paste0(River,
+                              "<br>SN: ", Serial,
+                              "<br>Lat: ", Lat,
+                              "<br>Long: ", Long),
+                   radius = 5,
+                   stroke = TRUE,
+                   weight = 1,
+                   fillOpacity = .8) |> 
+  addScaleBar(position = "bottomright") |> 
+  addLegend(position = "topright",
+            colors = c("blue", "green", "purple","grey"),
+            labels = c("Water", "Air", "Level","Data not retreived in 2022"))
+  
+
+```
+
+
+Check if loggers are out of water by comparing to air loggers.
+If water loggers are within XX of daily mix and max of air loggers, then it will be considered out of water
+Ideally, will be able to do this statistically, but for now will use current method
+```{r out of water checks, echo = FALSE}
+
+comparisonsAir <- loggers |> filter(Recording == "Air") |> distinct(River, SFA)
+comparisonsWater <- loggers |> filter(Recording == "Water" | Recording == "Level") |> distinct(River, SFA) |> filter(River %in% comparisonsAir$River)
+
+watercheck <- loggers |> 
+  filter(River %in% comparisonsWater$River)
+
+
+############################################
+
+RiverList1 <- unique(watercheck$River[watercheck$Recording == "Water"])
+df1 <- data.frame()
+for (i in 1:length(RiverList1)) {
+  
+  data <- watercheck |> 
+  filter(River == RiverList1[i])
+
+SNWater <- unique(data$Serial[data$Recording == "Water"])
+SNAir <- unique(data$Serial[data$Recording == "Air"])
+
+
+  for (i in 1:length(SNWater)) {
+     # 
+     # data1 <- data |> 
+     #   filter(Serial == SNWater[i] | Serial == SNAir) |> 
+     #   dplyr::select(River, Serial, Date.Time, Temp.C, Recording) |> 
+     #   spread(Recording, Temp.C) |> 
+     #   group_by(date(Date.Time)) |> 
+     #   mutate(maxAir = max(Air)) |> 
+     #   mutate(maxWater = max(Water)) |> 
+     #   mutate(check = maxWater - maxAir) |> 
+     #   mutate(keep = 1,
+     #          keep = replace(keep, check > -1, 0)) |> 
+     #   ungroup() |> 
+       # dplyr::select(River, Serial, Date.Time, Water, Air, keep) |>
+       # gather(key = "Recording", value = "Temp.C", c(Water, Air)) |>
+       # filter(Recording != "Air") |>
+       # filter(!is.na(Temp.C))
+
+
+     data1 <- data |>
+       filter(Serial == SNWater[i] | Serial == SNAir) |>
+       mutate(Date = date(Date.Time)) |> 
+       filter(!is.na(Temp.C)) |> 
+       # mutate(ID = paste(Recording, Serial, sep = "_")) |> 
+       dplyr::select(River, Date.Time, Date, Temp.C, Recording) |>
+       spread(Recording, Temp.C) |>
+       group_by(Date) |>
+       mutate(maxAir = max(Air)) |>
+       mutate(maxWater = max(Water)) |>
+       mutate(check = maxWater - maxAir) |>
+       mutate(keep = 1,
+              keep = replace(keep, check > -1, 0)) |>
+       ungroup() |> 
+       dplyr::select(River, Date.Time, Water, Air, keep) |>
+       gather(key = "Recording", value = "Temp.C", c(Water, Air)) |>
+       mutate(Serial = NA,
+              Serial = replace(Serial, Recording == "Water", SNWater[i]),
+              Serial = replace(Serial, Recording == "Air", SNAir))
+
+df1 <- rbind(df1, data1)
+}   
+  
+}
+
+RiverList2 <- unique(watercheck$River[watercheck$Recording == "Level"])
+df2 <- data.frame()
+for (i in 1:length(RiverList2)) {
+  
+  data <- watercheck |> 
+  filter(River == RiverList2[i])
+
+SNWater <- unique(data$Serial[data$Recording == "Level"])
+SNAir <- unique(data$Serial[data$Recording == "Air"])
+
+
+  for (i in 1:length(SNWater)) {
+  
+     # data2 <- data |>
+     #   filter(Recording != "Water") |>
+     #   dplyr::select(River, Serial, Date.Time, Temp.C, Recording) |>
+     #   spread(Recording, Temp.C) |>
+     #   group_by(date(Date.Time)) |>
+     #   mutate(maxAir = max(Air)) |>
+     #   mutate(maxWater = max(Level)) |>
+     #   mutate(check = maxWater - maxAir) |>
+     #   mutate(keep = 1,
+     #          keep = replace(keep, check > -1, 0)) |>
+     #   ungroup() |>
+     #   dplyr::select(River, Serial, Date.Time, Level, Air, keep) |>
+     #   gather(key = "Recording", value = "Temp.C", c(Level, Air)) |> 
+     #   filter(Recording != "Air") |> 
+     #   filter(!is.na(Temp.C))
+     
+      data2 <- data |>
+       filter(Serial == SNWater[i] | Serial == SNAir) |>
+       mutate(Date = date(Date.Time)) |> 
+       filter(!is.na(Temp.C)) |> 
+       # mutate(ID = paste(Recording, Serial, sep = "_")) |> 
+       dplyr::select(River, Date.Time, Date, Temp.C, Recording) |>
+       spread(Recording, Temp.C) |>
+       group_by(Date) |>
+       mutate(maxAir = max(Air)) |>
+       mutate(maxWater = max(Level)) |>
+       mutate(check = maxWater - maxAir) |>
+       mutate(keep = 1,
+              keep = replace(keep, check > -1, 0)) |>
+       ungroup() |> 
+       dplyr::select(River, Date.Time, Level, Air, keep) |>
+       gather(key = "Recording", value = "Temp.C", c(Level, Air)) |>
+       mutate(Serial = NA,
+              Serial = replace(Serial, Recording == "Level", SNWater[i]),
+              Serial = replace(Serial, Recording == "Air", SNAir))
+     
+df2 <- rbind(df2, data2)
+}   
+  
+}
+
+full <- bind_rows(df1, df2) |> 
+  # filter(keep == 1) |>
+  distinct() |> 
+  filter(Recording != "Air") |> 
+  filter(!is.na(Temp.C))
+
+# check that all values from water temperature readings were retained
+watercheck |> filter(Recording != "Air") |> filter(!is.na(Temp.C)) |> dim()
+
+cleaned <- watercheck |> left_join(full) |> 
+  mutate(keep = replace(keep, Recording == "Air", 1)) |> 
+  filter(keep == 1)
+
+ggplot() +
+  geom_line(data = watercheck |> filter(Recording == "Air"), 
+            aes(x = Date.Time, y = Temp.C),
+            colour = 'red') +
+  geom_line(data = watercheck |> filter(Recording == "Water"),
+            aes(x = Date.Time, y = Temp.C),
+            colour = 'blue') +
+  facet_wrap(~River)
+
+ggplot() +
+  geom_line(data = cleaned |> filter(Recording == "Air"), 
+            aes(x = Date.Time, y = Temp.C),
+            colour = 'red') +
+  geom_line(data = cleaned |> filter(Recording == "Water"),
+            aes(x = Date.Time, y = Temp.C),
+            colour = 'blue') +
+  facet_wrap(~River)
+
+
+```
+### Need to determine the range between max air and max water when IN WATER
+Its a rough estimate for now. need more modelling to better determine in and out of water (definitely related to oscillation)
+
+# Next step is to incorporate level logger data
+
+## still need river numbers

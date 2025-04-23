@@ -1,0 +1,734 @@
+---
+title: "Data-Exploration"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = 'C:/Users/Geissingere/Documents/Projects/Temperature-Project')
+options(knitr.kable.NA = '')
+
+library(tidyverse)
+library(lubridate)
+library(knitr)
+# library(pandoc)
+# library(kableExtra)
+library(ggpubr)
+library(leaflet)
+
+```
+
+```{r data setup, message = FALSE, echo = FALSE, warning = FALSE}
+source("./Rcode/data-cleaning/hobolink_station_combo.R")
+source("./Rcode/data-cleaning/hobolink_station_cleaning.R")
+
+hobo <- hobo |> 
+  mutate(River.Number = replace(River.Number, Station == "Shinneys", 15),
+         SFA = replace(SFA, Station == "Shinneys", 2),
+         River.Name = replace(River.Name, Station == "Shinneys", "Shinney's River")) |>
+  group_by(Station) |> 
+  arrange(Time) |> 
+  ungroup() |> 
+  mutate(SFA = as.integer(SFA)) |> 
+  ## add river number to station
+  mutate(Station2 = paste(River.Number, ". ", Station, sep = ""),
+         # convert station to factor ordered by river number
+         Station2 = factor(Station2),
+         Station2 = fct_reorder(Station2, River.Number))
+
+data2022 <- read.csv("./data-working/output/logger-data-2022-cleaned.csv") |> 
+  mutate(Depth.cm = as.integer(Depth.cm))
+
+data2023 <- read.csv("./data-working/output/logger-data-2023-cleaned.csv")
+
+loggers <- bind_rows(data2022, data2023) |> 
+  mutate(Time = ymd_hms(paste(Date, Time))) |> 
+  dplyr::select(-group, -FinalTime, -Date.Time) |> 
+  mutate(Date = ymd(Date)) |> 
+  distinct()
+
+full <- hobo |> 
+  dplyr::select(Time, Station, Serial, WaterLevel_meters, WaterTemperature_C, SFA, River.Number, River.Name, lat, long, out.of.water) |> 
+  mutate(Recording = "Hobo Weather Station") |> 
+  rename(Temp.C = WaterTemperature_C,
+         Level.m = WaterLevel_meters,
+         Lat = lat,
+         Long = long) |> 
+  mutate(Date = date(Time),
+         Year = year(Time)) |> 
+  bind_rows(loggers)
+
+water <- full |> 
+  filter(Recording != "Air") |> 
+  filter(out.of.water == 0)
+
+```
+
+```{r stations, echo = FALSE, warning = FALSE, message = FALSE}
+# ---- Upload station data ----
+# rivers by sfa
+sfas <- read.csv("./data-working/loggerSFAs.csv")
+
+# station data
+loggers2022 <- read.csv( "./data-working/Loggers_2022.csv",
+                         skip = 1,
+                         header = TRUE) |>
+  rename(Logger.Type = "Logger.Type.Note..minilog...level.are.not.bluetooth") |>
+  dplyr::select(2:17) |> 
+  dplyr::select(-SFA) |> 
+  mutate(Lat = as.numeric(Lat),
+         Long = as.numeric(Long),
+         Serial = as.integer(Serial),
+         Depth.cm = as.integer(Depth.cm)) |> 
+  rename(Station = River) |>
+  left_join(sfas, join_by(Station == name)) |> 
+  ## format deployement dates
+  ## correct the diff format date
+  mutate(Date.deployed.MDY = replace(Date.deployed.MDY, Date.deployed.MDY == "30-Jun", "6/30/2022")) |> 
+  ## format remaining dates
+  mutate(Date.deployed.MDY = mdy(Date.deployed.MDY)) |> 
+  ## format time deployed
+  mutate(Time.deployed = replace(Time.deployed, Time.deployed == "900", "9:00"),
+         Time.deployed = replace(Time.deployed, Time.deployed == "", "20:00"),
+         Time.deployed = str_pad(Time.deployed, width = 5, side = "left", pad = "0")) |> 
+  ## time deployed as date/time
+  mutate(Time.deployed = ymd_hm(paste(Date.deployed.MDY, Time.deployed, sep = " "))) |> 
+  ## for special cases where logger was redeployed and date deployed isn't accurate
+  mutate(Time.deployed = replace(Time.deployed, Serial == 21031919, NA),
+         Time.deployed = replace(Time.deployed, Serial == 21022451, NA)) |> 
+  mutate(Date.deployed.MDY = replace(Date.deployed.MDY, Serial == 21031919, NA),
+         Date.deployed.MDY = replace(Date.deployed.MDY, Serial == 21022451, NA)) |> 
+  mutate(Recording = replace(Recording, Logger.Type == "Cellular Station" | Logger.Type == "Wifi Station", "Hobo Weather Station")) |> 
+  distinct()
+
+## 2023 station data
+source("./Rcode/data-cleaning/metadata-setup.R") 
+
+
+loggers2023 <- loggers2023 |> 
+  mutate(Group = "CAFE") |> 
+  mutate(Group = replace(Group, dply_by == "Kevin Power", "SAEN")) |> 
+  rename(Station = name,
+         Long = x,
+         Lat = y,
+         Location.description = locn_desc,
+         Serial = serial_no,
+         Logger.Type = eq_type,
+         Recording = recording) |> 
+  mutate(Recording = replace(Recording, Logger.Type == "Cellular" | Logger.Type == "Cellular Station" | Logger.Type == "Wifi Station", "Hobo Weather Station")) |> 
+  mutate(Time.deployed = ymd_hm(dply_dt_tm),
+         Date.deployed.MDY = date(Time.deployed)) |> 
+  ##update which cellular are from CP
+  mutate(Group = replace(Group, Recording == "Hobo Weather Station" & Station == "Burlington", "C&P"),
+         Group = replace(Group, Recording == "Hobo Weather Station" & Station == "BDL", "C&P"),
+         Group = replace(Group, Recording == "Hobo Weather Station" & Station == "Salmon Brook Cell Station", "C&P"),
+         Group = replace(Group, Recording == "Hobo Weather Station" & Station == "South Branch", "C&P"),
+         Group = replace(Group, Recording == "Hobo Weather Station" & Station == "Stoney River", "C&P")) |> 
+  mutate(Depth.cm = depth_m*100) |> 
+  dplyr::select(-depth_m, -dply_by, -dply_dt_tm)
+
+
+## SAEN station data
+saen <- read.csv("./data-working/SAEN Loggers 2023.csv",
+                 skip = 1,
+                 header = TRUE) |> 
+  rename(Logger.Type = "Logger.Type.Note..minilog...level.are.not.bluetooth") |>
+  dplyr::select(2:17) |> 
+  dplyr::select(-SFA) |> 
+  mutate(Lat = as.numeric(Lat),
+         Long = as.numeric(Long),
+         Serial = as.integer(Serial),
+         wpt = as.integer(wpt)) |> 
+  rename(Station = River) |> 
+  left_join(sfas, join_by(Station == name)) |> 
+  mutate(Group = "SAEN") |> 
+  ## format remaining dates
+  mutate(Date.deployed.MDY = mdy(Date.deployed.MDY)) |> 
+  ## format time deployed
+  mutate(Time.deployed = replace(Time.deployed, Time.deployed == "900", "9:00"),
+         Time.deployed = replace(Time.deployed, Time.deployed == "", "20:00"),
+         Time.deployed = str_pad(Time.deployed, width = 5, side = "left", pad = "0")) |> 
+  ## time deployed as date/time
+  mutate(Time.deployed = ymd_hm(paste(Date.deployed.MDY, Time.deployed, sep = " "))) |> 
+  distinct()
+
+## loggers that are not reocrded in FieldApp
+loggers22only <- loggers2022 |> 
+  filter(!Serial %in% loggers2023$Serial)
+
+
+full.loggers <- bind_rows(loggers22only, loggers2023, saen) |> 
+  mutate(Recording = replace(Recording, Logger.Type == "Cellular" | Logger.Type == "Cellular Station" | Logger.Type == "Wifi Station", "Hobo Weather Station"),
+         Recording = replace(Recording, Logger.Type == "Level", "Level"),
+         Recording = replace(Recording, Logger.Type == "Pendant" & Recording == "", "Water"),
+         Recording = replace(Recording, Logger.Type == "Tidbit" & Recording == "", "Water")) |> 
+  # filter(Logger.Type != "Minilog") |> 
+  add_row(Station = "Shinneys", Lat = 52.59578, Long = -56.05356, River.Name = "Shinney's River", Recording = "Hobo Weather Station", Group = "CAFE") |> 
+  mutate(River.Name = replace(River.Name, River.Name == "", NA)) |> 
+  mutate(Lat = round(Lat, 3),
+         Long = round(Long, 3)) |>
+  ## add a datetime to Shinneys and South Branch
+  mutate(Date.deployed.MDY = replace(Date.deployed.MDY, Station == "South Branch" & Recording == "Hobo Weather Station", as_date("2023-05-01")),
+         Date.deployed.MDY = replace(Date.deployed.MDY, Station == "Shinneys" & Recording == "Hobo Weather Station", as_date("2023-05-01")),
+         Time.deployed = replace(Time.deployed, Station == "South Branch" & Recording == "Hobo Weather Station", as_date("2023-05-01")),
+         Time.deployed = replace(Time.deployed, Station == "Shinneys" & Recording == "Hobo Weather Station", as_date("2023-05-01"))) |> 
+  mutate(Station = replace(Station, Recording == "Hobo Weather Station" & is.na(Time.deployed), NA)) |> 
+  filter(!is.na(Station)) |> 
+  distinct() |> 
+  ## update group deployements
+  mutate(Group = replace(Group, River.Name == "Terra Nova River" & Recording == "Water", "FABEC"),
+         Group = replace(Group, River.Name == "Gambo River" | River.Name == "Middle Brook" | River.Name == "Northwest Brook, Alexander Bay", "FABEC"),
+         Group = replace(Group, River.Name == "Hunt River" | River.Name == "Flowers River", "AROC"),
+         Group = replace(Group, is.na(Group), "CAFE")) |> 
+  ##
+  mutate(Recording = replace(Recording, is.na(Recording) | Recording == "", "Water")) |> 
+  mutate(Group = factor(Group, levels = c("CAFE", "C&P", "FABEC", "SAEN", "AROC")),
+         Recording = factor(Recording, levels = c("Water", "Air", "Level", "Hobo Weather Station"))) |> 
+  ## remove the first campbellton cellular deployement
+  # filter(Station != "Campbellton" | Recording != "Hobo Weather Station" | Logger.Type == "Cellular Station") |> 
+  arrange(Recording, Group) |> 
+  dplyr::select(-X.1, -X.2, -lat, -long) |> 
+  distinct()
+
+
+```
+
+```{r temp filter, warning = FALSE}
+remove <- c('21157528', '21307161', '213071696','356364','21011379', '21307159', '21158063', '21233613', '21050855', '21210588', '21158030', '21233608')
+
+removeafter <- data.frame(Serial = c(358250, 358246, 357566, 353240, 21158016),
+                      cutoff = c("2022-08-30 00:00:00", "2022-10-04 00:00:00", "2022-08-30 00:00:00", "2022-10-14 00:00:00", "2022-11-05 00:00:00")) |>
+    add_row(Serial = 20542205,
+          cutoff = "2020-07-04 09:30:00") |> 
+  mutate(cutoff = ymd_hms(cutoff))
+
+  
+remove1 <- full |>
+  filter(Serial %in% removeafter$Serial) |>
+  left_join(removeafter) |>
+  mutate(remove = Time >= cutoff) |>
+  filter(remove == TRUE)
+
+removebefore <- data.frame(Serial = 21307169,
+                           cutoff = "2022-07-07 00:00:00") |> 
+  add_row(Serial = 358250,
+          cutoff = "2022-05-18 10:30:00") |> 
+  add_row(Serial = 357566,
+          cutoff = "2022-05-18 11:30:00") |> 
+  add_row(Serial = 21371789,
+          cutoff = "2022-07-06 16:18:43") |> 
+  add_row(Serial = 21371796,
+          cutoff = "2022-07-06 05:33:20") |> 
+  add_row(Serial = 21371798,
+          cutoff = "2022-07-06 10:42:08") |> 
+  add_row(Serial = 21159030,
+          cutoff = "2022-05-11 10:30:00") |> 
+  add_row(Serial = 21031920,
+          cutoff = "2022-05-11 09:30:00") |> 
+  mutate(cutoff = ymd_hms(cutoff))
+
+remove2 <- full |>
+  filter(Serial %in% removebefore$Serial) |>
+  left_join(removebefore) |>
+  mutate(remove = Time <= cutoff) |>
+  filter(remove == TRUE)
+
+removechunk <- data.frame(Serial = 21031928,
+                          Start = "2022-07-12 00:00:00",
+                          Stop = "2022-08-18 00:00:00") |> 
+  add_row(Serial = 21031923,
+          Start = "2022-07-14 06:30:00",
+          Stop = "2022-07-18 17:30:00") |> 
+  add_row(Serial = 21158085,
+          Start = "2022-07-21 13:30:00",
+          Stop = "2022-07-24 05:30:00") |> 
+  add_row(Serial = 21158085,
+          Start = "2022-09-08 20:30:00",
+          Stop = "2022-09-17 07:30:00")
+
+remove3 <- full |>
+  filter(Serial %in% removechunk$Serial) |>
+  left_join(removechunk) |>
+  # mutate(remove = FALSE,
+  #        remove = replace(remove, Time > Start & Time < Stop, TRUE))
+  mutate(remove1 = Time >= Start,
+         remove2 = Time <= Stop) |> 
+  mutate(remove = remove1==remove2) |> 
+  filter(remove == TRUE) |> 
+  dplyr::select(-remove1, -remove2)
+
+RemoveAll <- bind_rows(remove1, remove2, remove3) |>
+  mutate(keep = 0)
+
+full2 <- full |>
+  mutate(Serial = as.character(Serial)) |>
+  filter(!Serial %in% remove) |>
+  mutate(Serial = as.integer(Serial)) |>
+  left_join(RemoveAll) |>
+  mutate(keep = replace(keep, is.na(keep), 1)) |>
+  mutate(out.of.water = replace(out.of.water, keep == 0, 2)) |>
+  mutate(out.of.water = factor(out.of.water))
+
+# full2 <- full
+
+```
+
+```{r temperature figs, echo = FALSE, warning=FALSE, message = FALSE}
+## 
+SNlist <- unique(full2$Serial)
+
+for (i in seq_along(SNlist)) {
+  p <- full2 |> 
+    filter(Serial == SNlist[i]) |> 
+    filter(!is.na(Temp.C)) |> 
+    ggplot() +
+    geom_point(aes(x = Time, y = Temp.C, colour = as.character(out.of.water))) +
+    ggtitle(paste(full$Recording[full$Serial==SNlist[i]], SNlist[i], full$Station[full$Serial == SNlist[i]])) +
+    scale_color_manual(values = c("black", "red", "green")) +
+    theme(legend.position = "bottom") +
+    scale_x_datetime(date_labels = "%d-%b-%y")
+  
+  print(p)
+  
+}
+
+```
+
+```{r removed temperature figs, echo = FALSE, warning=FALSE, message = FALSE}
+##
+SNlist <- remove
+
+for (i in seq_along(SNlist)) {
+  p <- full |>
+    filter(Serial == SNlist[i]) |>
+    filter(!is.na(Temp.C)) |>
+    ggplot() +
+    geom_point(aes(x = Time, y = Temp.C, colour = as.character(out.of.water))) +
+    ggtitle(paste(full$Recording[full$Serial==SNlist[i]], SNlist[i], full$Station[full$Serial == SNlist[i]])) +
+    scale_color_manual(values = c("black", "red", "green")) +
+    theme(legend.position = "bottom") +
+    scale_x_datetime(date_labels = "%d-%b-%y")
+
+  print(p)
+
+}
+
+```
+
+
+```{r temp filter2 }
+
+water2 <- water |>
+  mutate(Serial = as.character(Serial)) |>
+  filter(!Serial %in% remove) |>
+  mutate(Serial = as.integer(Serial)) |>
+  left_join(RemoveAll) |>
+  mutate(keep = replace(keep, is.na(keep), 1)) |>
+  filter(keep == 1) |>
+  dplyr::select(-keep)
+
+
+```
+
+```{r last year rap, warning=FALSE, message = FALSE}
+## all deployed loggers
+full.loggers |>
+  group_by(Recording) |>
+  summarise(n())
+
+## all deployed loggers
+full.loggers |>
+  group_by(Recording, SFA) |>
+  summarise(n())
+
+## water (no out of water)
+water2 |>
+  distinct(Station, Serial, Recording, SFA, River.Number) |>
+  group_by(Recording, SFA) |>
+  summarise(n())
+
+```
+
+```{r map, echo = FALSE, warning=FALSE, message = FALSE}
+# ---- MAP -----
+
+# all in current data
+leaflet()%>%
+  setView(lng = -55.67, lat=48.93, zoom=5 ) %>%
+  addTiles() %>%
+    addCircles( data = filter( full.loggers, Recording == "Air"),
+              color='darkred',
+              popup = ~paste(Station,
+                             "<br>", River.Name,
+                             "<br>", SFA),
+              opacity = .8) %>%
+  addCircles( data = filter(full.loggers, Recording == "Water" ),
+              color='blue',
+              popup = ~paste(Station,
+                             "<br>", River.Name,
+                             "<br>", SFA),
+              opacity = .8) %>%
+  addCircles( data = filter( full.loggers, Recording == "Level" ),
+              color='purple',
+              popup = ~paste(Station,
+                             "<br>", River.Name,
+                             "<br>", SFA),
+              opacity = .8)%>%
+  addCircles( data = filter( full.loggers, Recording == "Hobo Weather Station"),
+              color='darkorange',
+              popup = ~paste(Station,
+                             "<br>", River.Name,
+                             "<br>", SFA),
+              opacity = .8) %>%
+  addScaleBar(position = "bottomright") %>%
+  addLegend( position = "topright",
+             colors = c('darkred','blue', 'purple', 'darkorange'),
+             labels = c("Air","Water", "Level", "Cellular Station") )
+```
+
+
+```{r summary stats, message = FALSE}
+# ----- summary statistics -----
+# % time above 20 and 23 separated by month and region
+
+# Station summary
+
+# summary(water)
+
+# percent of time > 20 during fishing season
+
+# total hours recorded for each river each month
+monthly_hours <- water2 |>
+  filter(!is.na(Temp.C)) |>
+  mutate(month = month(Time)) |>
+  group_by(Station, Recording, Year, month, SFA, River.Number) |>
+  summarise(total_hours = n()) |>
+  ungroup()
+
+
+
+monthly_days <- water2 |>
+  filter(!is.na(Temp.C)) |>
+  mutate(month = month(Time),
+         Day = date(Time)) |>
+  distinct(Station, Recording, Year, month, Day) |>
+  group_by(Station, Recording, Year, month) |>
+  summarise(total_days = n()) |>
+  ungroup()
+
+# by full days > 20
+days_above20 <- water2 |>
+  filter(!is.na(Temp.C)) |>
+  mutate(threshold = 0) |>
+  mutate(threshold = replace(threshold, Temp.C > 20, 1)) |>
+  mutate(Day = date(Time),
+         month = month(Time)) |>
+  group_by(Year, Day, month, Station, Recording, SFA, River.Number) |>
+  summarise(daily.threshold = sum(threshold), N=n()) |>
+  ungroup() |>
+  filter(N>=24) |>
+  mutate(hours = daily.threshold/N*24) |>
+  # mutate(percent.above = daily.threshold/24) |>
+  mutate(threshold = NA,
+         threshold = replace(threshold, hours == 0, "0 hrs above 20°C"),
+         threshold = replace(threshold, hours == 24, '24 hrs above 20°C'),
+         threshold = replace(threshold, hours >0 & hours < 6,  '> 0 to < 6 hrs above 20°C'),
+         threshold = replace(threshold, hours >=6 & hours <12, '6 to < 12 hrs above 20°C'),
+         threshold = replace(threshold, hours >=12 & hours <18, '12 to < 18 hrs above 20°C'),
+         threshold = replace(threshold, hours >=18 & hours <24, '18 to < 24 hrs above 20°C')) |>
+  mutate(threshold = factor(threshold,
+                            levels = c("0 hrs above 20°C", "> 0 to < 6 hrs above 20°C", "6 to < 12 hrs above 20°C", "12 to < 18 hrs above 20°C", "18 to < 24 hrs above 20°C", "24 hrs above 20°C"))) |>
+  group_by(threshold,Year, month, Station, Recording, SFA, River.Number) |>
+  summarise(N = n()) |>
+  ungroup() |>
+  left_join(monthly_days) |>
+  mutate(Percent_days = N/total_days *100) |>
+  group_by(threshold, Year, month, SFA) |>
+  summarise(percent_days = mean(Percent_days), sd=sd(Percent_days), N = n()) # |>
+
+```
+
+
+```{r summary figures, echo = FALSE, warning = FALSE}
+
+fig1a <- days_above20 |>
+  ggplot() +
+  geom_bar(aes( x = as.character(SFA), y = percent_days,
+                fill = as.character(month)),
+           stat = 'identity',
+           position = position_dodge(preserve = "single"),
+           colour = 'black') +
+  facet_wrap(~Year) +
+  ggtitle("Number of hours above 20 °C and 24 °C") +
+  ylim(0,100) +
+  facet_wrap(~threshold, drop = FALSE, nrow = 1) +
+  theme_bw() +
+  labs(y = "% Days") +
+  theme(legend.position = 'bottom',
+        axis.title = element_text(size=12),
+        axis.text = element_text(size=11),
+        strip.text = element_text(size=12),
+        legend.title = element_text(size = 12),
+        legend.text = element_text(size = 12),
+        plot.title = element_text(size = 16, hjust =0.5),
+        axis.text.x = element_blank(),
+        axis.title.x = element_blank()) +
+  scale_fill_brewer(palette = "Dark2")
+
+
+# by full days > 24
+days_above24 <- water2 |>
+  filter(!is.na(Temp.C)) |>
+  mutate(threshold = 0) |>
+  mutate(threshold = replace(threshold, Temp.C > 24, 1)) |>
+  mutate(Day = date(Time),
+         month = month(Time)) |>
+  group_by(Day, Year, month, Station, Recording, SFA) |>
+  summarise(daily.threshold = sum(threshold), N=n()) |>
+  ungroup() |>
+  filter(N>=24) |>
+  mutate(hours = daily.threshold/N*24) |>
+  # mutate(percent.above = daily.threshold/24) |>
+  mutate(threshold = NA,
+         threshold = replace(threshold, hours == 0, "0 hrs above 24°C"),
+         threshold = replace(threshold, hours == 24, '24 hrs above 24°C'),
+         threshold = replace(threshold, hours >0 & hours < 6,  '> 0 to < 6 hrs above 24°C'),
+         threshold = replace(threshold, hours >=6 & hours <12, '6 to < 12 hrs above 24°C'),
+         threshold = replace(threshold, hours >=12 & hours <18, '12 to < 18 hrs above 24°C'),
+         threshold = replace(threshold, hours >=18 & hours <24, '18 to < 24 hrs above 24°C')) |>
+  mutate(threshold = factor(threshold,
+                            levels = c("0 hrs above 24°C", "> 0 to < 6 hrs above 24°C", "6 to < 12 hrs above 24°C", "12 to < 18 hrs above 24°C", "18 to < 24 hrs above 24°C", "24 hrs above 24°C"))) |>
+  group_by(threshold, Year, month, Station, Recording, SFA) |>
+  summarise(N = n()) |>
+  ungroup() |>
+  left_join(monthly_days) |>
+  mutate(Percent_days = N/total_days *100) |>
+  group_by(threshold, Year, month, SFA) |>
+  summarise(percent_days = mean(Percent_days), sd=sd(Percent_days), N = n()) # |>
+
+
+fig1b <- days_above24 |>
+  ggplot() +
+  geom_bar(aes( x = as.character(SFA), y = percent_days,
+                fill = as.character(month)),
+           stat = 'identity',
+           position = position_dodge(preserve = "single"),
+           colour = 'black') +
+  ylim(0,100) +
+  facet_wrap(~threshold, drop = FALSE, nrow = 1) +
+  theme_bw() +
+  labs(y = "% Days") +
+  theme(legend.position = 'bottom',
+        axis.title = element_text(size=12),
+        axis.text = element_text(size=11),
+        strip.text = element_text(size=12),
+        legend.title = element_text(size = 12),
+        legend.text = element_text(size = 12),
+        axis.text.x = element_text(angle = 90)) +
+  scale_fill_brewer(palette = "Dark2")
+
+ggarrange(fig1a, fig1b,
+          nrow = 2,
+          heights = c(1,1.2),
+          common.legend = TRUE,
+          legend = 'bottom')
+
+```
+
+```{r variation, warning = FALSE, message = FALSE}
+# ------ Assessing Regional Variation -----
+
+# initial overview of regional variation based on current dataset
+
+water2 |>
+  distinct(SFA, Station, River.Name) |>
+  group_by(SFA) |>
+  summarise(n())
+
+water2 |>
+  distinct(SFA, River.Name) |>
+  group_by(SFA) |>
+  summarise(n())
+
+# graphical view of regional variation for
+# Avalon-East
+# Central-West
+# Exploits
+# Labrador
+
+# do it by River
+
+
+water2 |>
+  group_by(SFA, River.Name, Time) |>
+  summarise(Temp.C = mean(Temp.C), sd = sd(Temp.C)) |>
+  ggplot() +
+  geom_line(aes( x = Time,
+                 y = Temp.C)) +
+  geom_hline(yintercept = 20, colour = 'red', linetype = 'dashed') +
+  facet_wrap(~River, ncol = 2) +
+  theme_bw() +
+  labs( x = "Date",
+        y = "Temperature (°C)") +
+  facet_wrap(~SFA) +
+  theme(axis.title = element_text(size = 12),
+        axis.text = element_text(size= 11),
+        strip.text = element_text(size=12),
+        plot.title = element_text(size = 16, hjust=0.5))
+
+
+```
+
+
+```{r overall summary, message = FALSE, warning = FALSE}
+# ----- Overall summary for SAR doc ----
+water2 |>
+  filter(!is.na(Temp.C)) |>
+  mutate(Month = month(Time)) |>
+  group_by(Year, Month, SFA) |>
+  summarise(mean(Temp.C), sd(Temp.C), min(Temp.C), max(Temp.C))
+
+
+## By Month
+water2 |>
+  filter(!is.na(Temp.C)) |>
+  mutate(Month = month(Time)) |>
+  group_by(Year, Month, SFA) |>
+  summarise(Temp = mean(Temp.C), SDTemp = sd(Temp.C), minTemp = min(Temp.C), maxTemp = max(Temp.C)) |>
+  ungroup() |>
+  mutate(Date = ym(paste(Year, Month))) |>
+  filter(Year >= 2022) |>
+  ggplot() +
+  geom_line(aes(x = Month, y = Temp)) +
+  geom_ribbon(aes(x = Month, ymin = Temp - SDTemp, ymax = Temp + SDTemp),alpha = 0.3) +
+  facet_grid(SFA~Year)
+
+
+## By Day
+water2 |>
+  filter(!is.na(Temp.C)) |>
+  mutate(Day = yday(Time)) |>
+  group_by(Year, Day, SFA) |>
+  summarise(Temp = mean(Temp.C), SDTemp = sd(Temp.C), minTemp = min(Temp.C), maxTemp = max(Temp.C)) |>
+  ungroup() |>
+  filter(Year >= 2022) |>
+  ggplot() +
+  geom_line(aes(x = Day, y = Temp)) +
+  geom_ribbon(aes(x = Day, ymin = Temp - SDTemp, ymax = Temp + SDTemp),alpha = 0.3) +
+  facet_grid(SFA~Year)
+
+
+# total hours recorded for each river each month
+hours_season <- water2 |>
+  filter(!is.na(Temp.C)) |>
+  mutate(month = month(Time)) |> mutate(season = NA,
+         season = replace(season, month >=6 & month <=8, "summer"),
+         season = replace(season, month == 9 | month == 10, "autumn"),
+         season = replace(season, month <= 5 & Temp.C > 0, "spring")) |>
+  ## group SFA 1 and SFA 2 together
+  mutate(Region = "Nfld",
+         Region = replace(Region, SFA == 1, "Lab"),
+         Region = replace(Region, SFA == 2, "Lab")) |>
+  group_by(Station, Serial, Recording, Year, season, Region) |>
+  summarise(total_hours = n()) |>
+  ungroup()
+
+
+# percent of total time above 20 °C per season by sfa**
+## group SFA1 and SFA2 together
+## group NL together
+# 20 C
+water2 |>
+  filter(!is.na(Temp.C)) |>
+  mutate(month = month(Time),
+         threshold = 'below') |>
+  mutate(threshold = replace(threshold, Temp.C > 20, 'above')) |>
+  ## group SFA 1 and SFA 2 together
+  mutate(Region = "Nfld",
+         Region = replace(Region, SFA == 1, "Lab"),
+         Region = replace(Region, SFA == 2, "Lab")) |>
+  ## create season variable
+  mutate(season = NA,
+         season = replace(season, month >=6 & month <=8, "summer"),
+         season = replace(season, month == 9 | month == 10, "autumn"),
+         season = replace(season, month <= 5 & Temp.C > 0, "spring")) |>
+  group_by(threshold, Station, Serial, Recording, Year, season, Region) |>
+  summarise(hours = n()) |>
+  ungroup() |>
+  left_join(hours_season) |>
+  ## only use for seasons with > 30 days of data recorded (720 hrs)
+  filter(total_hours > 720) |>
+  mutate(percent_hours = hours/total_hours*100) |>
+  group_by(threshold, Region, Year, season) |>
+  summarise(Percent = mean(percent_hours), SD = sd(percent_hours), N= n()) |>
+  ungroup() |>
+  filter(Year >= 2022) |>
+  filter(threshold == "above") |>
+  filter(!is.na(season)) |>
+  arrange(Region, Year, season) |>
+  print(n="Inf")
+
+# percent of total time above 24 °C per month by region**
+# 24 C
+water2 |>
+  filter(!is.na(Temp.C)) |>
+  mutate(month = month(Time),
+         threshold = 'below') |>
+  mutate(threshold = replace(threshold, Temp.C > 24, 'above')) |>
+    ## group SFA 1 and SFA 2 together
+  ## group SFA 1 and SFA 2 together
+  mutate(Region = "Nfld",
+         Region = replace(Region, SFA == 1, "Lab"),
+         Region = replace(Region, SFA == 2, "Lab")) |>
+ ## create season variable
+  mutate(season = NA,
+         season = replace(season, month >=6 & month <=8, "summer"),
+         season = replace(season, month == 9 | month == 10, "autumn"),
+         season = replace(season, month <= 5 & Temp.C > 0, "spring")) |>
+  group_by(threshold, Station, Serial, Recording, Year, season, Region) |>
+  summarise(hours = n()) |>
+  ungroup() |>
+  left_join(hours_season) |>
+    ## only use for seasons with > 30 days of data recorded (720 hrs)
+  filter(total_hours > 720) |>
+  mutate(percent_hours = hours/total_hours*100) |>
+  group_by(threshold, Region, Year, season) |>
+  summarise(Percent = mean(percent_hours), SD = sd(percent_hours), N= n()) |>
+  ungroup() |>
+  filter(Year >= 2022) |>
+  filter(threshold == "above") |>
+  filter(!is.na(season)) |>
+  arrange(Region, Year, season) |>
+  print(n="Inf")
+
+
+## Average temperatures
+water2 |>
+  filter(!is.na(Temp.C)) |>
+  mutate(month = month(Time)) |>
+  ## group SFA 1 and SFA 2 together
+  mutate(Region = "Nfld",
+         Region = replace(Region, SFA == 1, "Lab"),
+         Region = replace(Region, SFA == 2, "Lab")) |>
+ ## create season variable
+  mutate(season = NA,
+         season = replace(season, month >=6 & month <=8, "summer"),
+         season = replace(season, month == 9 | month == 10, "autumn"),
+         season = replace(season, month <= 5 & Temp.C > 0, "spring")) |>
+  group_by(Region, Year, season) |>
+  summarise(Mean = mean(Temp.C), sd = sd(Temp.C), minT = min(Temp.C), maxT = max(Temp.C)) |>
+  filter(Year >= 2022) |>
+  arrange(Region, season, Year)
+
+```
+
+```{r save file}
+# save working file
+
+waterfinal <- water2 |> dplyr::select(-cutoff, -remove, -Start, -Stop) |> 
+  separate(Time, c("Date", "Time"), " ")
+
+write.csv(waterfinal, "./data-working/output/compiled-water-temperature-13Nov2023.csv", row.names = FALSE)
+
+```

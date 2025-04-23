@@ -1,0 +1,410 @@
+---
+title: "Regional Maps"
+output: html_document
+date: "`r Sys.Date()`"
+---
+```{r setup, include=FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = 'C:/Users/Geissingere/Documents/Projects/Temperature-Project')
+options(knitr.kable.NA = '')
+
+library(tidyverse)
+library(lubridate)
+library(knitr)
+# library(pandoc)
+library(ggpubr)
+library(leaflet)
+library(osmdata)
+library(sf)
+library(geodata)
+library(kableExtra)
+
+```
+
+
+```{r loggers, echo = FALSE, warning = FALSE, message= FALSE}
+
+source("./Rcode/data-cleaning/logger-metadata-2024.R")
+
+source("./Rcode/data-cleaning/hobolink_station_combo.R")
+source("./Rcode/data-cleaning/hobolink_station_cleaning.R")
+
+water22 <- read.csv("./data-working/output/compiled-water-temperature-2014to2022.csv") |> 
+  mutate(Serial = as.character(Serial),
+         SFA = as.character(SFA))
+water23 <- read.csv("./data-working/output/compiled-water-temperature-2023.csv") |> 
+  mutate(Serial = as.character(Serial),
+         SFA = as.character(SFA))
+water24 <- read.csv("./data-working/output/compiled-water-temperature-2024.csv") |> 
+  mutate(SFA = as.character(SFA))
+
+partner.data <- read.csv("./data-working/output/compiled-partner-data-2024.csv") |> 
+  mutate(Serial = as.character(Serial)) 
+
+waterfull <- bind_rows(water22, water23, water24, partner.data) |> 
+  mutate(Date.UTC = ymd(Date.UTC),
+         Time.UTC = ymd_hms(paste(Date.UTC, Time.UTC), tz = "UTC")) |> 
+  filter(Year >= 2022) |> 
+  mutate(Time = with_tz(Time.UTC, tzone = "America/St_Johns")) |> 
+  mutate(Date = date(Time))
+
+
+sfas <- read.csv("./data-working/loggerSFAs.csv")
+
+water <- waterfull |> 
+  filter(out.of.water == 0) |> 
+  filter(!is.na(Temp.C)) |> 
+  ## remove the northwest brook short term loggers
+  mutate(Serial = as.integer(Serial)) |> 
+  filter(!is.na(Serial))
+
+hobo <- hobo |> 
+  mutate(Station2 = factor(paste(River.Number, ". ", Station, sep = ""))) |>
+  mutate(Station2 = fct_reorder(Station2, River.Number)) |> 
+  mutate(Time = with_tz(Time.UTC, tzone = "America/St_Johns")) |>  
+  arrange(SFA, River.Number, Serial, Time) |> 
+  mutate(Date = date(Time)) |> 
+  mutate(WaterTemperature_C = replace(WaterTemperature_C, out.of.water !=0, NA))
+
+removes <- current.loggers |> 
+  filter(Recording == "Hobo Weather Station") |> 
+  filter(Station %in% c("BDL", "Goodyears Dam", "North East Placentia")) |> 
+  mutate(remove = "yes")
+
+
+positions <- data.frame(Station = c("Grey River", "Eagle ", "Eagle River", "Sandhill", 
+                                  'Char Brook 2', "Char Brook 1", 'Hunt River', 'St. Lewis River',
+                                  'Gander River', "Flowers", "Salmon River (Main Brook)", "Serpentine River",
+                                  "West Brook River", "Lapoile River"),
+                        Lat = c(47.7, 53.5, 53.58747, 53.58747,  
+                                55.6, 55.6, 55.5, 52.4,
+                                49.24853, 55.63294, 49.01228, 48.96094, 
+                                48.83364, 47.83728),
+                        Long = c(-56.9, -57.5, -56.35394, -56.35394, 
+                                  -60.9, -60.9, -60.7, -56.4,
+                                 -54.50048, -61.42194, -54.91569, -58.4317,
+                                 -56.00881, -58.28581)) 
+
+partner.loggers <- read.csv("./data-working/Partner-loggers/Meta Data for Partner Loggers.csv") |> 
+  rename(Serial = Serial..,
+         Station = Site.Name) |> 
+  left_join(positions, join_by(Station)) |> 
+  mutate(Lat = coalesce(Latitude, Lat),
+         Long = coalesce(Longitude, Long)) |> 
+  dplyr::select(Station, Lat, Long, Serial, Organization) |> 
+  mutate(Recording = "Water",
+         Group = "Partners")
+
+cp.loggers <- read.csv("./data-working/C & P 2024/2024 C& P Metadata.csv") |> 
+  rename(Station = River,
+         Serial = Logger.SN,
+         Lat = Latitude,
+         Long = Longitude) |> 
+  mutate(Group = "C&P") |> 
+  mutate(Recording = "Water") |> 
+  mutate(Serial = as.character(Serial))
+
+
+## loggers
+loggers <- current.loggers |> 
+  left_join(removes) |> 
+  filter(is.na(remove)) |> 
+  dplyr::select(-remove) |> 
+  bind_rows(partner.loggers) |> 
+  ## add Gray River and Grandy's River
+
+  add_row(Station = "Grandys River", 
+          Lat = 47.689433,
+          Long = -57.001846,
+          Recording = "Water",
+          SFA = "12",
+          River.Number = 125,
+          River.Name = "Grandy's River",
+          Group = "CAFE") |> 
+  ## make sure group is correctly reflected
+  mutate(Group = replace(Group, is.na(Group) & River.Number == 61 & Logger.Type == "Tidbit", "FABEC"),
+         Group = replace(Group, is.na(Group) & River.Number == 60 & Logger.Type == "Tidbit", "FABEC"),
+         Group = replace(Group, is.na(Group) & River.Number == 59 & Logger.Type == "Tidbit", "FABEC"),
+         Group = replace(Group, is.na(Group) & River.Number == 62 & Logger.Type == "Tidbit", "FABEC")) |> 
+  mutate(Group = replace(Group, is.na(Group) & Serial %in% c(21417670, 21290092, 21042542, 21290104), "SAEN")) |>
+  mutate(Group = replace(Group, is.na(Group) & Recording == "Water" & River.Name == "Hunt River", "AROC")) |> 
+  mutate(Group = replace(Group, Recording == "Hobo Weather Station" & Serial %in% c(21560024, 21560027,	21931677, 21560020,	21560026, 21931676,21560019,21931680, 21931681, 21560023,	21368518), "C&P")) |> 
+  mutate(Group = replace(Group, Recording == "Level" & Station == "Shinneys River", "NCC")) |> 
+  ## all remaining are cafe
+  mutate(Group = replace(Group, is.na(Group), "CAFE")) |> 
+  ## remove bad data
+  filter(!Serial %in% c(86,46,48,123456)) |> 
+  dplyr::select(Station, Lat, Long, Recording, Serial, Logger.Type, SFA, River.Number, River.Name, Group) |> 
+  distinct() |> 
+  ## remove duplicates
+  filter(Station != "Indian Bay Brook") |> 
+  filter(Serial != 21436595) |> 
+  ## remove partner loggers in main data and add updated list
+  filter(Group %in% c("CAFE", "C&P")) |> 
+  bind_rows(partner.loggers) |> 
+  bind_rows(cp.loggers)
+  
+  
+
+```
+
+
+```{r detachment}
+detach <- read.csv("./data-working/Copy of CnP Detachments and Rivers.csv") |> 
+  rename(River.Number = River.No.)
+
+loggers <- loggers |> 
+  left_join(detach) |> 
+  filter(Recording!="Air")
+
+
+```
+
+```{r map prep, echo = FALSE}
+# ---- detailed map ----
+
+mapcanada <- gadm("canada", level = 1, path = ".", version = "latest")
+
+mapcan_sf <- st_as_sf(mapcanada)
+
+b <- opq(bbox = c(-61.06, 46.71, -52.95, 55.62)) |>
+  add_osm_features(features = list( "water" = "river",
+                                    "water" = "stream")) |>
+  osmdata_sf()
+
+
+```
+
+```{r basemap, echo = FALSE}
+## only want the 2024 stations
+cols <- c("Water" = "blue",  "Level" = "purple", "Hobo Weather Station" = 'orange')
+basemap <- ggplot(mapcan_sf) +
+  geom_sf() +
+  geom_sf(data = b$osm_multipolygons, aes()) +
+
+  xlim(-61.45, -52.7) +
+  ylim(46.7, 55.65) +
+  theme_bw() +
+  labs(x = "Latitude",
+       y = "Longitude",
+       fill = "Recording",
+       shape = "Group") +
+  theme(panel.grid = element_blank(),
+        axis.title = element_text(size = 11),
+        axis.text = element_text(size = 10)) +
+  scale_fill_manual(name = "Recording",
+                    values = cols) +
+  guides(fill = "none")
+
+
+# ggsave("./output/map-figures/cellularstations.png", device = "png", height = 8, width = 8, units = "in")
+
+
+```
+
+```{r full map, echo = FALSE}
+cols <- c("Water" = "blue",  "Level" = "purple", "Hobo Weather Station" = 'orange')
+
+loggers2 <- loggers |> 
+  mutate(Group = replace(Group, Recording == "Hobo Weather Station" & Group == "CAFE", "Hobo Weather Station - Science"),
+         Group = replace(Group, Recording == "Hobo Weather Station" & Group == "C&P", "Hobo Weather Station - C&P")) |> 
+  mutate(Group = replace(Group, Group == "CAFE", "Science"))
+
+fullmap <- basemap +
+  # geom_point(data = loggers2,
+  #            aes(x = Long, y = Lat, shape = Group, fill = Group)) +
+  geom_point(data = loggers2 |> filter(Group == "Partners"),
+             aes(x = Long, y = Lat, shape = "Partners", fill = "Partners"), size = 2.5) +
+  geom_point(data = loggers2 |> filter(Group == "C&P"),
+             aes(x = Long, y = Lat, shape = "C&P", fill = "C&P"), size = 2.5) +
+  geom_point(data = loggers2 |> filter(Group == "Science"),
+             aes(x = Long, y = Lat, shape = "Science", fill = "Science"), size = 2.5) +
+  geom_point(data = loggers2 |> filter(Group == "Hobo Weather Station - C&P"),
+             aes(x = Long, y = Lat, shape = "Hobo Weather Station - C&P", fill = "Hobo Weather Station - C&P"), size = 2.5) +
+  geom_point(data = loggers2 |> filter(Group == "Hobo Weather Station - Science"),
+             aes(x = Long, y = Lat, shape = "Hobo Weather Station - Science", fill = "Hobo Weather Station - Science"), size = 2.5) +
+  scale_fill_manual(name = "Loggers",
+                     labels = c("Hobo Weather Station - Science", "Hobo Weather Station - C&P", "Science", "C&P", "Partners"),
+                    breaks = c("Hobo Weather Station - Science", "Hobo Weather Station - C&P", "Science", "C&P", "Partners"),
+                     values = c("Hobo Weather Station - Science" = 'orange',
+                                "Hobo Weather Station - C&P" = 'orange',
+                                "Science" = 'blue',
+                                "C&P" = 'purple',
+                                "Partners" = 'darkgreen')) +
+  scale_shape_manual(name = "Loggers",
+                     labels = c("Hobo Weather Station - Science", "Hobo Weather Station - C&P", "Science", "C&P", "Partners"),
+                     breaks = c("Hobo Weather Station - Science", "Hobo Weather Station - C&P", "Science", "C&P", "Partners"),
+                     values = c("Hobo Weather Station - Science" = 22,
+                                "Hobo Weather Station - C&P" = 25,
+                                "Science" = 21,
+                                "C&P" = 21,
+                                "Partners" = 21)) +
+  guides(fill = guide_legend(override.aes = list(shape = c(22,25,21,21,21))),
+         shape = guide_legend(override.aes = list(fill = c('orange', 'orange', 'blue', 'purple', 'darkgreen'))))
+
+nfld <- fullmap + 
+  xlim(-60, -52.7) +
+  ylim(46.7, 52)
+
+lab <- fullmap +
+  xlim(-61.45, -55.7) +
+  ylim(51.5, 55.65)
+  
+ggsave(fullmap, file = "./output/map-figures/full-map.png")
+ggsave(nfld, file = "./output/map-figures/nfld-map.png")
+ggsave(lab, file = "./output/map-figures/lab-map.png")
+
+```
+
+
+```{r labrador}
+labT <- basemap + 
+    geom_point(data = loggers |> filter(Detachment == "Goose Bay"), 
+               aes( x = Long, y = Lat, fill = Recording),
+               size = 3, alpha = 0.85, colour = alpha('black', 1), shape = 21) +
+  ylim(52, 55.65) +
+  xlim(-61, -56.05)
+
+  
+labL <- basemap + 
+  geom_point(data = loggers |> 
+               filter(Detachment == "Goose Bay") |> 
+               filter(Recording %in% c("Hobo Weather Station", "Level")), 
+             aes( x = Long, y = Lat, fill = Recording),
+             size = 3, alpha = 0.85, colour = alpha('black', 1), shape = 21) +
+  ylim(52, 55.65) +
+  xlim(-61, -56.05)
+
+
+```
+
+```{r west coast}
+southwestT <- basemap + 
+      geom_point(data = loggers |> filter(Detachment == "Stephenville"), 
+               aes( x = Long, y = Lat, fill = Recording),
+               size = 3, alpha = 0.85, colour = alpha('black', 1), shape = 21) +
+  ylim(47.45, 49.5) +
+  xlim(-60, -57)
+
+southwestL <- basemap + 
+    geom_point(data = loggers |> 
+               filter(Detachment == "Stephenville") |> 
+               filter(Recording %in% c("Hobo Weather Station", "Level")), 
+             aes( x = Long, y = Lat, fill = Recording),
+             size = 3, alpha = 0.85, colour = alpha('black', 1), shape = 21) +
+  ylim(47.45, 49.5) +
+  xlim(-60, -57)
+
+```
+
+```{r centralwest coast}
+CentralWestT <- basemap +
+        geom_point(data = loggers |> filter(Detachment == "Springdale"), 
+               aes( x = Long, y = Lat, fill = Recording),
+               size = 3, alpha = 0.85, colour = alpha('black', 1), shape = 21) +
+  ylim(48.5, 50.5) +
+  xlim(-57.5, -54.5)
+
+CentralWestL <- basemap + 
+      geom_point(data = loggers |> 
+               filter(Detachment == "Springdale") |> 
+               filter(Recording %in% c("Hobo Weather Station", "Level")), 
+             aes( x = Long, y = Lat, fill = Recording),
+             size = 3, alpha = 0.85, colour = alpha('black', 1), shape = 21) +
+  ylim(48.5, 50.5) +
+  xlim(-57.5, -54.5)
+
+```
+
+```{r east coast}
+centraleastT <- basemap +
+        geom_point(data = loggers |> filter(Detachment == "Twillingate"), 
+               aes( x = Long, y = Lat, fill = Recording),
+               size = 3, alpha = 0.85, colour = alpha('black', 1), shape = 21) +
+  ylim(48.5, 50) +
+  xlim(-56, -54)
+
+centraleastL <- basemap + 
+      geom_point(data = loggers |> 
+               filter(Detachment == "Twillingate") |> 
+               filter(Recording %in% c("Hobo Weather Station", "Level")), 
+             aes( x = Long, y = Lat, fill = Recording),
+             size = 3, alpha = 0.85, colour = alpha('black', 1), shape = 21) +
+  ylim(48.5, 50) +
+  xlim(-56, -54)
+```
+
+```{r south coast}
+southT <- basemap +
+        geom_point(data = loggers |> filter(Detachment == "Marystown"), 
+               aes( x = Long, y = Lat, fill = Recording),
+               size = 3, alpha = 0.85, colour = alpha('black', 1), shape = 21) +
+  ylim(46.5, 48.5) +
+  xlim(-56.5, -54)
+
+southL <- basemap + 
+      geom_point(data = loggers |> 
+               filter(Detachment == "Marystown") |> 
+               filter(Recording %in% c("Hobo Weather Station", "Level")), 
+             aes( x = Long, y = Lat, fill = Recording),
+             size = 3, alpha = 0.85, colour = alpha('black', 1), shape = 21) +
+  ylim(46.5, 48.5) +
+  xlim(-56.5, -54)
+```
+
+```{r northeast coast}
+northeastT <- basemap +
+        geom_point(data = loggers |> filter(Detachment == "Clarenville"), 
+               aes( x = Long, y = Lat, fill = Recording),
+               size = 3, alpha = 0.85, colour = alpha('black', 1), shape = 21) +
+  ylim(48, 49.5) +
+  xlim(-55.5, -53.5)
+
+northeastL <- basemap + 
+      geom_point(data = loggers |> 
+               filter(Detachment == "Clarenville") |> 
+               filter(Recording %in% c("Hobo Weather Station", "Level")), 
+             aes( x = Long, y = Lat, fill = Recording),
+             size = 3, alpha = 0.85, colour = alpha('black', 1), shape = 21) +
+  ylim(48, 49.5) +
+  xlim(-55.5, -53.5)
+```
+
+```{r avalon}
+avalonT <- basemap +
+        geom_point(data = loggers |> filter(Detachment == "Bay Roberts"), 
+               aes( x = Long, y = Lat, fill = Recording),
+               size = 3, alpha = 0.85, colour = alpha('black', 1), shape = 21) +
+  ylim(46.5, 48.25) +
+  xlim(-55, -52.5)
+
+avalonL <- basemap + 
+      geom_point(data = loggers |> 
+               filter(Detachment == "Bay Roberts") |> 
+               filter(Recording %in% c("Hobo Weather Station", "Level")), 
+             aes( x = Long, y = Lat, fill = Recording),
+             size = 3, alpha = 0.85, colour = alpha('black', 1), shape = 21) +
+  ylim(46.5, 48.25) +
+  xlim(-55, -52.5)
+```
+
+```{r save temperature maps}
+ggsave(labT, file = "./output/labT.png", device = "png", height = 4, width = 4)
+ggsave(southwestT, file = "./output/swT.png", device = "png", height = 4, width = 4)
+ggsave(CentralWestT, file = "./output/centralwestT.png", device = "png", height = 4, width = 4)
+ggsave(centraleastT, file = "./output/centraleastT.png", device = "png", height = 4, width = 4)
+ggsave(southT, file = "./output/southT.png", device = "png", height = 4, width = 4)
+ggsave(northeastT, file = "./output/northeastT.png", device = "png", height = 4, width = 4)
+ggsave(avalonT, file = "./output/avalonT.png", device = "png", height = 4, width = 4)
+```
+
+
+```{r save level maps}
+ggsave(labL, file = "./output/labL.png", device = "png", height = 4, width = 4)
+ggsave(southwestL, file = "./output/swL.png", device = "png", height = 4, width = 4)
+ggsave(CentralWestL, file = "./output/centralwestL.png", device = "png", height = 4, width = 4)
+ggsave(centraleastL, file = "./output/centraleastL.png", device = "png", height = 4, width = 4)
+ggsave(southL, file = "./output/southL.png", device = "png", height = 4, width = 4)
+ggsave(northeastL, file = "./output/northeastL.png", device = "png", height = 4, width = 4)
+ggsave(avalonL, file = "./output/avalonL.png", device = "png", height = 4, width = 4)
+```
