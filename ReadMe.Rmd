@@ -1,0 +1,48 @@
+---
+title: "ReadMe"
+author: "Keith Lewis"
+date: "2025-03-26"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Purpose
+The purpose of this file is to keep track of temperature notes.
+
+Use WaterTemperature_C - this gts converted to Temp.C.  Curtis said that this is a more sensitive sensor.
+
+## Rant
+Had a **hell** of a time with two issues.  One was that ggplotly would not work for Biscay Bay while ggplot would.  The reason is that there were no closed or monitored periods for that year and plotly doesn't take this.  All clues pointed in other directions (or so I thought) and some of it may have had to do with how Emilie set it up although, to be fair, she was doing things for other reasons - the fault is with me.  
+The other reason is that knitr does weird things with the file paths and seems to have necessitated the development of package here and the use of here::here to tell markdown where to find the files.  
+Dave said that Rmarkdown renders a markdown file which is then read by Pandoc and mutated into other file formats.  
+
+# Data structure
+
+Exploits: 4 files (2023/2024); water temp - no water level  
+
+# Data checking
+Check the dates for temperatures and water levels of the csv file against the figs but also the vertical lines.  
+Check that the water levels are displaying properly ito time series but also re-scaling
+Do the final data checks for removed data that Emilie started.  
+Check data difference calculations in the tables
+
+Can we get a seperate RMD file just for the ggplotly figs??
+Check all of the vertical line closures
+
+Duplicates in Gander and Humber River for closures - see closure_summaries.R, import closures for notes
+
+What about water_level 2023
+- Biscay Bay: 
+
+## vert lines
+So, it seem like the vertical lines are OK.  I was worried about Traverse Brook which has a v18 at the start of the season but this matches Emilie's graphs (environmental protocols) because the River is above 18 degrees for several days but not 19 or 20 at this time.  Her graphs are actually better for showing some of these trends and should be used as a back up.  
+But the question reamins, why are df20 and 2f20_23 basically the same for vert lines
+
+## temp time series - 
+The seasonX dataframe average the temperature over Y number of loggers per river.  So, the temperature in the plots will not exactly match any given csv file if there is more than one logger.  
+
+# Time Zones UTC
+https://www.timeanddate.com/time/zone/timezone/utc

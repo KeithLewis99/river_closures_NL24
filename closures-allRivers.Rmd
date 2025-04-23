@@ -1,0 +1,1726 @@
+---
+title: "NL River water temperature and angling restrictions for 2022 and 2023"
+output:
+  html_document:
+    df_print: paged
+  pdf_document:
+    keep_tex: true
+    fig_caption: true
+    latex_engine: pdflatex
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+geometry: margin=1in
+fontfamily: mathpazo
+fontsize: 12pt
+spacing: double
+header-includes: \usepackage{caption}
+toc: true
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = 'C:/Users/Geissingere/Documents/Projects/Temperature-Project')
+options(knitr.kable.NA = '')
+
+library(tidyverse)
+library(lubridate)
+library(knitr)
+library(pandoc)
+library(kableExtra)
+library(ggpubr)
+library(osmdata)
+library(sf)
+library(geodata)
+
+```
+
+```{r data setup, message = FALSE, echo = FALSE, warning = FALSE}
+source("./Rcode/data-cleaning/hobolink_station_combo.R")
+source("./Rcode/data-cleaning/hobolink_station_cleaning.R")
+
+timeintervals <- data.frame(Time_UTC = seq.POSIXt(from = as_datetime("2022-01-01 00:00:00", tz = "UTC"), to = as_datetime("2024-01-01 00:00:00", tz = "UTC"), by = duration(30, units=  "minutes")))
+
+hobo <- hobo |> 
+  mutate(Station2 = factor(paste(River.Number, ". ", Station, sep = ""))) |>
+  mutate(Station2 = fct_reorder(Station2, River.Number)) |> 
+  arrange(SFA, River.Number, Serial, Time) |> 
+  mutate(Date = date(Time)) |> 
+  mutate(WaterTemperature_C = replace(WaterTemperature_C, out.of.water !=0, NA)) |> 
+  mutate(River.Name = replace(River.Name, Station == "Shinneys", "Shinney's River")) |> 
+  dplyr::select(-eq_type) |> 
+  distinct() |> 
+  mutate(WaterTemperature_C = replace(WaterTemperature_C, out.of.water != 0, NA)) |> 
+  # rename(Time_UTC = Time.UTC) |> 
+  left_join(timeintervals, join_by(closest(Time.UTC >= Time_UTC))) |> 
+  group_by(Station, Serial, Time_UTC, lat, long, SFA, River.Number, River.Name) |> 
+  summarise(WaterTemperature_C = mean(WaterTemperature_C, na.rm = TRUE),
+            WaterLevel_meters = mean(WaterLevel_meters, na.rm = TRUE)) |> 
+  ungroup() |> 
+  mutate(Time = with_tz(Time_UTC, tzone = "America/St_Johns")) |>
+  filter(!is.na(WaterTemperature_C))
+  
+
+timeintervals2 <- data.frame(Time_UTC = seq.POSIXt(from = as_datetime("2022-01-01 00:30:00", tz = "UTC"), to = as_datetime("2024-01-01 00:30:00", tz = "UTC"), by = duration(1, units=  "hours")))
+
+water <- read.csv("./data-working/output/compiled-water-temperature-13Feb2024.csv") |> 
+  mutate(Time.UTC = ymd_hms(paste(Date.UTC, Time.UTC), tz = "UTC")) |> 
+  filter(Recording != "Hobo Weather Station") |>
+  mutate(Temp.C = replace(Temp.C, out.of.water != 0, NA)) |> 
+    left_join(timeintervals2, join_by(closest(Time.UTC >= Time_UTC))) |> 
+  group_by(Station, Time_UTC, Lat, Long, SFA, River.Number, River.Name) |> 
+  summarise(Temp.C = mean(Temp.C, na.rm = TRUE),
+            Level.m = mean(Level.m, na.rm = TRUE)) |> 
+  ungroup() |> 
+  mutate(Year = year(Time_UTC),
+         Time = with_tz(Time_UTC, tzone = "America/St_Johns")) |> 
+  filter(!is.na(Temp.C)) |> 
+  distinct()
+
+detachments <- read.csv("./data-working/Copy of CnP Detachments and Rivers.csv") |> 
+  rename(River.Number = River.No.)
+
+```
+
+```{r map setup, message = FALSE, echo = FALSE, warning = FALSE}
+mapcanada <- gadm("canada", level = 1, path = ".", version = "latest")
+
+mapcan_sf <- st_as_sf(mapcanada)
+
+# b <- opq(bbox = c(-61.06, 46.71, -52.95, 55.62)) |>
+#   add_osm_features(features = list( "water" = "river",
+#                                     "water" = "stream")) |>
+#   osmdata_sf()
+
+
+
+```
+
+
+
+```{r river closure data, include = FALSE, message = FALSE, warning = FALSE}
+notices22 <- read.csv("./data-working/Notice to Anglers.csv") |> 
+  mutate(Date = mdy(Date),
+         Time = str_pad(Time, width = 4, side = "left", pad = 0)) |> 
+  rename(SFA = Area,
+         River.Number = River.number,
+         River.Name = River.name) |> 
+  mutate(Notice.Time = ymd_hm(paste(Date,Time, sep = " "))) |> 
+  filter(notes != "season opening") |>
+  # filter(notes != "season closure") |> 
+  filter(Year == 2022) |>
+  distinct() |> 
+    dplyr::select(Year, SFA, River.Number, River.Name, Status, Notice.Time) |>
+  group_by(River.Name, Status) |> 
+  arrange(Notice.Time) |> 
+  mutate(group = row_number()) |> 
+   spread(key = Status, value = Notice.Time) |> 
+  mutate(SFA = as.integer(SFA)) |> 
+  ungroup() |> 
+  filter(closed < as_datetime("2023-09-07 00:00:00")) 
+
+
+notices23 <- read.csv("./data-working/Notice to Anglers.csv") |> 
+  mutate(Date = mdy(Date),
+         Time = str_pad(Time, width = 4, side = "left", pad = 0)) |> 
+  rename(SFA = Area,
+         River.Number = River.number,
+         River.Name = River.name) |> 
+  mutate(Notice.Time = ymd_hm(paste(Date,Time, sep = " "))) |> 
+  filter(notes != "season opening") |>
+  # filter(notes != "season closure") |> 
+  filter(Year == 2023) |>
+  distinct() |> 
+    dplyr::select(Year, SFA, River.Number, River.Name, Status, Notice.Time) |>
+  group_by(River.Name, Status) |> 
+  arrange(Notice.Time) |> 
+  mutate(group = row_number()) |> 
+   spread(key = Status, value = Notice.Time) |> 
+  mutate(SFA = as.integer(SFA)) |> 
+  ungroup() |> 
+  filter(closed < as_datetime("2023-09-07 00:00:00"))
+
+notices <- bind_rows(notices22, notices23) |> 
+  distinct()
+ 
+river_closures <- water |> 
+  mutate(SFA= as.integer(SFA)) |> 
+  filter(Year >= 2022) |> 
+  # mutate(Time = with_tz(Time_UTC, tzone = "America/St_Johns")) |> 
+  # filter(River.Name %in% notices$River.Name) |> 
+  left_join(notices, join_by(River.Name, Year, SFA, River.Number, closest(Time >= closed))) |> 
+  left_join(detachments) |> 
+  distinct()
+  
+
+  
+hobo_closure <- hobo |> 
+  mutate(SFA = as.integer(SFA)) |> 
+  mutate(Date = date(Time),
+         Year = year(Time)) |> 
+  filter(Year >= 2022) |> 
+  # filter(River.Name %in% notices$River.Name) |> 
+  left_join(notices, join_by(River.Name, Year, SFA, River.Number, closest(Time >= closed))) |> 
+  filter(month(Date) >= 6 & month(Date) <= 10) |> 
+  filter(River.Name != "Hunt River") |> 
+  group_by(River.Name) |> 
+  left_join(detachments) |> 
+  distinct()
+
+```
+
+
+```{r env protocol, echo = FALSE, message = FALSE, warning = FALSE}
+river_closures2 <- river_closures |>
+# test <- river_closures |> 
+  # filter(Station == "Shinney's Highway") |>
+  group_by(River.Name, River.Number, Station, Year) |>
+  arrange(Time) |> 
+  mutate(ep1 = 0,
+         ep1 = replace(ep1, Temp.C > 20, 1)) |> 
+  ## identify when water changes protocol state
+  mutate(state.change = ep1 - lag(ep1),
+         state.change = replace(state.change, is.na(state.change) | state.change != 0, 1)) |> 
+         # state.change = replace(state.change, is.na(state.change), 0)) |> 
+  mutate(state.change2 = cumsum(state.change)) |> 
+  ungroup() |> 
+  ## count hours of obs
+  group_by(River.Name,River.Number, Station, Year, state.change2) |> 
+  mutate(obs = n()) |> 
+  ## determine interval between measurements
+  ungroup() |> 
+  group_by(River.Name, River.Number, Station, Year) |> 
+  mutate(interval = as.integer(difftime(Time, lag(Time), units = "hour")),
+         interval = replace(interval, is.na(interval), max(interval, na.rm = TRUE))) |> 
+  ## determine if EP protocols are met
+  mutate(EP = obs >= (72/interval) & ep1 == 1) |>
+  ungroup() |> 
+  ## create grouping variable separated by EP state
+  group_by(River.Name, River.Number, Station, Year) |> 
+  mutate(EPgroup = EP == lag(EP)) |> 
+  mutate(EPgroup2 = 0,
+         EPgroup2 = replace(EPgroup2, EPgroup == FALSE | is.na(EPgroup), 1)) |> 
+  mutate(EPgroup = cumsum(EPgroup2)) |> 
+  ungroup() |> 
+  dplyr::select(-state.change, -state.change2, -obs, -interval, -EPgroup2) |> 
+  distinct()
+
+
+hobo_closure1 <- hobo_closure |>
+    # filter(!is.na(WaterTemperature_C)) |> 
+# test <- river_closures |> 
+  # filter(Station == "Shinney's Highway") |>
+  group_by(River.Name,River.Number, Station, Year) |>
+  arrange(Time) |> 
+  mutate(ep1 = 0,
+         ep1 = replace(ep1, WaterTemperature_C > 20, 1)) |> 
+  ## identify when water changes protocol state
+  mutate(state.change = ep1 - lag(ep1),
+         state.change = replace(state.change, is.na(state.change) | state.change != 0, 1)) |> 
+         # state.change = replace(state.change, is.na(state.change), 0)) |> 
+  mutate(state.change2 = cumsum(state.change)) |> 
+  ungroup() |> 
+  ## count hours of obs
+  group_by(River.Name, River.Number, Station, Year, state.change2) |> 
+  mutate(obs = n()) |> 
+  ## determine interval between measurements
+  ungroup() |> 
+  group_by(River.Name, Station, Year) |> 
+  ## determine if EP protocols are met
+  mutate(EP = obs >= 72 & ep1 == 1) |>
+  ungroup() |> 
+  ## create grouping variable separated by EP state
+  group_by(River.Name, River.Number, Station, Year) |> 
+  mutate(EPgroup = EP == lag(EP)) |> 
+  mutate(EPgroup2 = 0,
+         EPgroup2 = replace(EPgroup2, EPgroup == FALSE | is.na(EPgroup), 1)) |> 
+  mutate(EPgroup = cumsum(EPgroup2)) |> 
+  ungroup() |> 
+  dplyr::select(-state.change, -state.change2, -obs, -EPgroup2) |> 
+  distinct()
+  
+```
+
+
+```{r comparisons, echo = FALSE, warning = FALSE, message = FALSE}
+
+alarms <- data.frame(River.Name = c("Northeast River, Placentia", "Shinney's River", 
+                                    "Exploits River", "Exploits River","Exploits River",
+                                    "Campbellton River", "Terra Nova River", "Terra Nova River",
+                                    "Northwest Brook, Trepassey", "Northwest Brook, Trepassey",
+                                    "Salmonier River"),
+                     Station = c("North East Placentia", "Shinneys", 
+                                 "Exploits Bishops Fishway", "Exploits Bishops Fishway","Exploits Goodyears Dam",
+                                 "Campbellton", "Terra Nova Lower Fishway", "Terra Nova Lower Fishway",
+                                 "Trepassey NW Brook", "Trepassey NW Brook",
+                                 "Salmonier River"),
+                     Time = c("2023-07-18 08:30:00", "2023-07-16 13:30:00", 
+                               "2023-07-19 09:30:00", "2023-08-04 07:30:00","2023-07-28 10:30:00",
+                               "2023-07-13 10:30:00", "2023-07-02 13:30:00", "2023-07-15 11:30:00",
+                               "2023-07-19 10:30:00", "2023-07-24 10:30:00",
+                               "2023-07-19 09:45:00"),
+                     alarm = c("2023-07-18 08:30:00", "2023-07-16 13:30:00", 
+                               "2023-07-19 09:30:00", "2023-08-04 07:30:00","2023-07-28 10:30:00",
+                               "2023-07-13 10:30:00", "2023-07-02 13:30:00", "2023-07-15 11:30:00",
+                               "2023-07-19 10:30:00", "2023-07-24 10:30:00",
+                               "2023-07-19 09:45:00"),
+                     cleared = c("2023-07-27 05:30:00", "2023-07-29 22:00:00", 
+                                 "2023-08-01 06:30:00", "2023-08-08 00:30:00","2023-07-31 01:30:00",
+                                 "2023-07-30 22:30:00", "2023-07-05 06:30:00", "2023-08-06 22:30:00",
+                                 "2023-07-20 05:30:00", "2023-07-25 02:30:00",
+                                 "2023-07-27 06:25:00")) |> 
+  mutate(alarm = ymd_hms(alarm, tz = "America/St_Johns"),
+         cleared = ymd_hms(cleared, tz = "America/St_Johns"),
+         Time = ymd_hms(Time, tz = "America/St_Johns"))
+
+
+hobo_closure2 <- hobo_closure1 |> 
+  left_join(alarms) |> 
+  filter(Time >= as_datetime("2023-07-01 00:00:00") & Time <= as_datetime("2023-09-15 00:00:00")) 
+```
+
+```{r table prep, echo = FALSE, message= FALSE, warning= FALSE}
+tabledata1 <- hobo_closure1 |> 
+  rename(Temp.C = WaterTemperature_C,
+         Level.m = WaterLevel_meters) |> 
+  bind_rows(river_closures2) |> 
+  ## summary stats
+  mutate(Month = month(Time, label = TRUE, abbr = TRUE)) |> 
+  group_by(Detachment, River.Name, River.Number, Year, Month) |> 
+  summarise(Mean = round(mean(Temp.C),1),
+            Min = round(min(Temp.C),1),
+            Max = round(max(Temp.C),1)) |> 
+  ungroup() 
+td1 <- tabledata1 |> 
+  dplyr::select(Detachment, River.Name, River.Number, Year, Month, Mean) |> 
+  spread(key = Month, value = Mean) |> 
+  dplyr::select(Detachment, River.Name, River.Number, Year, Jun, Jul, Aug) |> 
+  rename(Mean_Jun = Jun,
+         Mean_Jul = Jul,
+         Mean_Aug = Aug)
+td2 <- tabledata1 |> 
+  dplyr::select(Detachment, River.Name, River.Number, Year, Month, Min) |> 
+  spread(key = Month, value = Min) |> 
+  dplyr::select(Detachment, River.Name, River.Number, Year, Jun, Jul, Aug) |> 
+  rename(Min_Jun = Jun,
+         Min_Jul = Jul,
+         Min_Aug = Aug)
+td3 <- tabledata1 |> 
+  dplyr::select(Detachment, River.Name, River.Number, Year, Month, Max) |> 
+  spread(key = Month, value = Max) |> 
+  dplyr::select(Detachment, River.Name, River.Number, Year, Jun, Jul, Aug) |> 
+  rename(Max_Jun = Jun,
+         Max_Jul = Jul,
+         Max_Aug = Aug)
+
+tabledata1 <- left_join(td1, td2) |> 
+  left_join(td3)
+
+tabledata2 <- hobo_closure1 |> 
+   rename(Temp.C = WaterTemperature_C,
+         Level.m = WaterLevel_meters) |> 
+  bind_rows(river_closures2) |> 
+  ## environmental protocol summary
+  mutate(Month = month(Time, label = TRUE, abbr = TRUE)) |> 
+  filter(EP == TRUE) |> 
+  group_by(Detachment, River.Name, River.Number, Station, Year, Month, EPgroup) |> 
+  filter(Time == min(Time) | Time == max(Time)) |> 
+  mutate(TimeAbove = difftime(Time, lag(Time), unit = "days"),
+         TimeAbove = replace(TimeAbove, TimeAbove < duration(3, unit = "days"), NA),
+         TimeAbove = as.numeric(str_remove(TimeAbove, "days")),
+         TimeAbove = as.integer(round(TimeAbove))) |> 
+  filter(!is.na(TimeAbove)) |> 
+  ungroup() |> 
+  group_by(Detachment, River.Name, River.Number, Station, Year, Month) |> 
+  summarise(Above20 = sum(TimeAbove)) |> 
+  ungroup() |> 
+  group_by(Detachment, River.Name, River.Number, Year, Month) |> 
+  summarise(Above20 = round(mean(Above20))) |> 
+  ungroup() |> 
+  spread(key = Month, value = Above20) |> 
+  dplyr::select(-Sep) |> 
+  rename(Above20_Jun = Jun,
+         Above20_Jul = Jul,
+         Above20_Aug = Aug)
+
+tabledata3 <- notices |> 
+  mutate(days_closed = difftime(opened, closed, units = "days")) |> 
+  group_by(Year, River.Number) |> 
+  summarise(days_closed = sum(days_closed, na.rm = TRUE)) |> 
+  ungroup() |> 
+  mutate(days_closed = as.numeric(str_remove(days_closed, "days")),
+         days_closed = round(days_closed)) |> 
+  filter(days_closed>0)
+
+tabledata <- tabledata1 |> 
+  # left_join(tabledata2) |> 
+  left_join(tabledata3)
+
+```
+
+# Description
+Hourly water temperature in relation to angling restrictions are presented in the following tables and figures. Mean monthly water temperature (°C), monthly temperature range (min-max °C), and total restriction days by year and river are presented in Tables 1-7. Figures include hourly water temperature (black line) and water level (blue line), when available. Red lines indicate when water temperature was > 20 °C for 3 or more days. Angling restrictions are depicted by gray shading. Red points on cellular station figures represent when the station alarm notification is sent (red square) and when the alarm is cleared cleared (red diamond). 
+
+# Bay Roberts
+
+```{r Bay Roberts Map, echo = FALSE, warning = FALSE, message = FALSE, fig.width = 6, fig.height=6, fig.fullwidth = TRUE}
+ggplot(mapcan_sf) +
+  geom_sf() +
+  # geom_sf(data = b$osm_multipolygons, aes()) +
+   geom_point(data = river_closures2 |> 
+               filter(Detachment == "Bay Roberts") |> 
+               distinct(River.Name, Lat, Long), aes( x = Long, y = Lat, shape = "Stand-alone Logger"),
+             size = 2, alpha = 0.85, colour = alpha('black', 1), fill = 'navy') +
+    geom_point(data = hobo_closure2 |> 
+               filter(Detachment == "Bay Roberts") |> 
+               distinct(River.Name, lat, long), aes( x = long, y = lat, shape = "Weather Station"),
+             size = 2, alpha = 0.85, colour = alpha('black', 1), fill = 'darkred') +
+  xlim(-55, -52.5) +
+  ylim(46.7, 48) +
+  theme_bw() +
+  labs(x = "Latitude",
+       y = "Longitude",
+       title = "Bay Roberts Detachment") +
+  theme(panel.grid = element_blank(),
+        axis.title = element_text(size = 11),
+        axis.text = element_text(size = 10)) +
+   scale_shape_manual(name = "Device",
+                     labels = c("Stand-alone Logger", "Weather Station"),
+                     values = c(21, 22)) +
+  guides(shape = guide_legend(override.aes = list(fill = c('navy', 'darkred'))))
+```
+
+```{r bay roberts table, echo = FALSE, warning = FALSE, message= FALSE}
+kable(tabledata |> filter(Detachment == "Bay Roberts") |> 
+        mutate(Range_Jun = paste(Min_Jun, "-", Max_Jun),
+               Range_Jul = paste(Min_Jul, "-", Max_Jul),
+               Range_Aug = paste(Min_Aug, "-", Max_Aug)) |> 
+        ## remove NA's
+        mutate(Range_Jun = replace(Range_Jun, Range_Jun == "NA - NA", NA),
+               Range_Jul = replace(Range_Jul, Range_Jul == "NA - NA", NA),
+               Range_Aug = replace(Range_Aug, Range_Aug == "NA - NA", NA)) |> 
+  dplyr::select(River.Name, River.Number, Year, 
+                Mean_Jun, Range_Jun,
+                Mean_Jul, Range_Jul,
+                Mean_Aug, Range_Aug,
+                days_closed) |>
+    arrange(River.Number, River.Name, Year) |> 
+    dplyr::select(-River.Number, -River.Name),
+  col.names = c("Year", "Mean (°C)", "Range (°C)", "Mean (°C)", "Range (°C)", "Mean (°C)", "Range (°C)", "Restricted angling days" ),
+  format = 'latex',
+  align = 'c',
+  linesep = "",
+  booktabs = TRUE,
+  caption = "Water temperature summary for rivers in Bay Roberts Detachment") |>
+  kable_styling(latex_options = c("striped", "scale_down")) |>
+  add_header_above(c(" " = 1,
+                     "June" = 2,
+                     "July" = 2,
+                     "August" = 2,
+                     " " = 1)) |> 
+  pack_rows(index = c("Renews River" = 2,
+                      "Northwest Brook, Trepassey" = 2,
+                      "Salmonier River" = 2,
+                      "Northeast River, Placentia" = 2,
+                      "Come By Chance River" =2))
+
+```
+
+## Cellular Stations 2023
+
+```{r bay roberts, echo = FALSE, warning = FALSE, message = FALSE, fig.fullwidth = TRUE}
+rivers <- unique(hobo_closure2$River.Name[hobo_closure2$Detachment == "Bay Roberts"])
+
+for (i in seq_along(rivers)) {
+  
+  data <- hobo_closure2 |> 
+    filter(River.Name == rivers[i]) |> 
+    filter(!is.na(WaterTemperature_C))
+  
+  
+  
+  p <- ggplot(data) +
+       geom_rect(aes(xmin = closed, xmax = opened, ymin = -Inf, ymax = Inf), alpha = 0.2, fill = 'lightgrey') +
+  geom_line(data = data |> filter(EP == FALSE | is.na(EP)),
+                                  aes(x = Time, y = WaterTemperature_C, group = EPgroup), colour = 'black') +
+  geom_line(data = data |> filter(EP == TRUE),
+                                  aes(x = Time, y = WaterTemperature_C, group = EPgroup), colour = 'red') +   
+  geom_line(aes(x = Time, y = WaterLevel_meters*20), colour = 'blue') +
+  # geom_vline(aes(xintercept = closed), colour = 'red') +
+  # geom_vline(aes(xintercept = opened), colour = 'darkgreen') +
+ 
+  geom_hline(aes(yintercept = 20), colour = 'darkgrey', linetype = 'dashed') +
+    geom_point(aes(x = alarm, y = WaterTemperature_C), shape = 22, fill = 'red',size = 3, alpha = 0.6) +
+    geom_point(aes(x = cleared, y = 20), shape = 23, fill = 'red', size = 3, alpha = 0.6) +
+  scale_y_continuous(name = "Water Temperature (°C)",
+                     sec.axis = sec_axis(trans= ~./20, name = "Water Level (meters)"),
+                     lim = c(0,31)) +
+    facet_wrap(~Station, ncol = 1) +
+     ggtitle(paste(rivers[i], unique(data$Year[data$River.Name == rivers[i]]), sep = " - ")) +
+  theme_bw() +
+  scale_x_datetime(date_breaks = "1 week", date_labels = "%d %b", limits = c(as_datetime("2023-07-01 00:00:00"), as_datetime("2023-09-15 00:00:00")))  +
+  theme(axis.text.x = element_text(angle = 90, vjust=0.5))
+
+  print(p)
+  cat('\n\n')
+}
+
+
+```
+
+
+## 2023 Loggers
+
+```{r bay roberts 2023, echo = FALSE, warning = FALSE, message= FALSE, fig.fullwidth = TRUE}
+rivers <- unique(river_closures2$River.Name[river_closures2$Year == 2023 & river_closures2$Detachment == "Bay Roberts" & river_closures2$Time >= as_datetime("2023-07-01 00:00:00", tz = "America/St_Johns") & river_closures2$Time <= as_datetime("2023-09-15 00:00:00", tz = "America/St_Johns")])
+
+# rivers <- river_closures2 |> 
+#   filter(Year == 2023) |> 
+#   
+
+for (i in seq_along(rivers)) {
+  
+  data <- river_closures2 |> 
+    filter(Year == 2023) |> 
+        filter(Time >= as_datetime("2023-07-01 00:00:00", tz = "America/St_Johns")) |> 
+    # filter(month(Time) >= 6) |> 
+    # filter(month(Time) <= 9) |> 
+    filter(River.Name == rivers[i]) |> 
+    filter(!is.na(Temp.C))
+  
+  
+  
+  p <- ggplot(data) +
+       geom_rect(aes(xmin = closed, xmax = opened, ymin = -Inf, ymax = Inf), alpha = 0.2, fill = 'lightgrey') +
+  geom_line(data = data |> filter(EP == FALSE | is.na(EP)),
+                                  aes(x = Time, y = Temp.C, group = EPgroup), colour = 'black') +
+  geom_line(data = data |> filter(EP == TRUE),
+                                  aes(x = Time, y = Temp.C, group = EPgroup), colour = 'red') +            
+  geom_line(aes(x = Time, y = Level.m*20), colour = 'blue') +
+  # geom_vline(aes(xintercept = closed), colour = 'red') +
+  # geom_vline(aes(xintercept = opened), colour = 'darkgreen') +
+  geom_hline(aes(yintercept = 20), colour = 'darkgrey', linetype = 'dashed') +
+    # geom_point(aes(x = alarm, y = WaterTemperature_C), shape = 22, fill = 'red',size = 3, alpha = 0.6) +
+    # geom_point(aes(x = cleared, y = 20), shape = 23, fill = 'red', size = 3, alpha = 0.6) +
+  scale_y_continuous(name = "Water Temperature (°C)",
+                     sec.axis = sec_axis(trans= ~./20, name = "Water Level (meters)"),
+                     lim = c(0,31)) +
+    facet_wrap(~Station) +
+    ggtitle(paste(rivers[i], unique(data$Year[data$River.Name == rivers[i]]), sep = " - ")) +
+  theme_bw() +
+  scale_x_datetime(date_breaks = "1 week", date_labels = "%d %b", limits = c(as_datetime("2023-07-01 00:00:00"), as_datetime("2023-09-15 00:00:00")))  +
+  theme(axis.text.x = element_text(angle = 90, vjust=0.5))
+
+  print(p)
+  cat('\n\n')
+}
+
+```
+
+## 2022 Loggers
+
+```{r bay roberts 2022, echo = FALSE, warning = FALSE, message= FALSE, fig.fullwidth = TRUE}
+
+rivers <- unique(river_closures2$River.Name[river_closures2$Year==2022 & river_closures2$Detachment == "Bay Roberts" & river_closures2$Time >= as_datetime("2022-07-01 00:00:00", tz = "America/St_Johns") & river_closures2$Time <= as_datetime("2022-09-15 00:00:00", tz = "America/St_Johns")] )
+
+rivers <- rivers[-1]
+
+for (i in seq_along(rivers)) {
+  
+  data <- river_closures2 |> 
+    filter(Year == 2022) |> 
+    filter(River.Name == rivers[i]) |> 
+    filter(!is.na(Temp.C))
+  
+  
+  
+  p <- ggplot(data) +
+       geom_rect(aes(xmin = closed, xmax = opened, ymin = -Inf, ymax = Inf), alpha = 0.2, fill = 'lightgrey') +
+  geom_line(data = data |> filter(EP == FALSE | is.na(EP)),
+                                  aes(x = Time, y = Temp.C, group = EPgroup), colour = 'black') +
+  geom_line(data = data |> filter(EP == TRUE),
+                                  aes(x = Time, y = Temp.C, group = EPgroup), colour = 'red') +            
+  geom_line(aes(x = Time, y = Level.m*20), colour = 'blue') +
+  # geom_vline(aes(xintercept = closed), colour = 'red') +
+  # geom_vline(aes(xintercept = opened), colour = 'darkgreen') +
+  geom_hline(aes(yintercept = 20), colour = 'darkgrey', linetype = 'dashed') +
+    # geom_point(aes(x = alarm, y = WaterTemperature_C), shape = 22, fill = 'red',size = 3, alpha = 0.6) +
+    # geom_point(aes(x = cleared, y = 20), shape = 23, fill = 'red', size = 3, alpha = 0.6) +
+  scale_y_continuous(name = "Water Temperature (°C)",
+                     sec.axis = sec_axis(trans= ~./20, name = "Water Level (meters)"),
+                     lim = c(0,31)) +
+    facet_wrap(~Station) +
+    ggtitle(paste(rivers[i], unique(data$Year[data$River.Name == rivers[i]]), sep = " - ")) +
+  theme_bw() +
+  scale_x_datetime(date_breaks = "1 week", date_labels = "%d %b", limits = c(as_datetime("2022-07-01 00:00:00"), as_datetime("2022-09-15 00:00:00")))  +
+  theme(axis.text.x = element_text(angle = 90, vjust=0.5))
+
+  print(p)
+    cat('\n\n')
+}
+
+```
+
+******
+
+# Clarenville
+
+```{r Clarenville Map, echo = FALSE, warning = FALSE, message = FALSE, fig.width = 6, fig.height=6, fig.fullwidth = TRUE}
+
+
+ggplot(mapcan_sf) +
+  geom_sf() +
+  # geom_sf(data = b$osm_multipolygons, aes()) +
+   geom_point(data = river_closures2 |> 
+               filter(Detachment == "Clarenville") |> 
+               distinct(River.Name, Lat, Long), aes( x = Long, y = Lat, shape = "Stand-alone Logger"),
+             size = 2, alpha = 0.85, colour = alpha('black', 1), fill = 'navy') +
+    geom_point(data = hobo_closure2 |> 
+               filter(Detachment == "Clarenville") |> 
+               distinct(River.Name, lat, long), aes( x = long, y = lat, shape = "Weather Station"),
+             size = 2, alpha = 0.85, colour = alpha('black', 1), fill = 'darkred') +
+   xlim(-56, -53.5) +
+  ylim(48, 50) +
+  theme_bw() +
+  labs(x = "Latitude",
+       y = "Longitude",
+       title = "Clarenville Detachment") +
+  theme(panel.grid = element_blank(),
+        axis.title = element_text(size = 11),
+        axis.text = element_text(size = 10)) +
+   scale_shape_manual(name = "Device",
+                     labels = c("Stand-alone Logger", "Weather Station"),
+                     values = c(21, 22)) +
+  guides(shape = guide_legend(override.aes = list(fill = c('navy', 'darkred'))))
+```
+```{r Clarenville table, echo = FALSE, warning = FALSE, message= FALSE}
+kable(tabledata |> filter(Detachment == "Clarenville") |> 
+        mutate(Range_Jun = paste(Min_Jun, "-", Max_Jun),
+               Range_Jul = paste(Min_Jul, "-", Max_Jul),
+               Range_Aug = paste(Min_Aug, "-", Max_Aug)) |> 
+        ## remove NA's
+        mutate(Range_Jun = replace(Range_Jun, Range_Jun == "NA - NA", NA),
+               Range_Jul = replace(Range_Jul, Range_Jul == "NA - NA", NA),
+               Range_Aug = replace(Range_Aug, Range_Aug == "NA - NA", NA)) |> 
+  dplyr::select(River.Name, River.Number, Year, 
+                Mean_Jun, Range_Jun,
+                Mean_Jul, Range_Jul,
+                Mean_Aug, Range_Aug,
+                days_closed) |>
+    arrange(River.Number, River.Name, Year) |> 
+    dplyr::select(-River.Number, -River.Name),
+  col.names = c("Year", "Mean (°C)", "Range (°C)", "Mean (°C)", "Range (°C)", "Mean (°C)", "Range (°C)", "Restricted angling days" ),
+  format = 'latex',
+  algin = 'c',
+  caption = "Water temperature summary for rivers in Clarenville Detachment",
+  linesep = "",
+  booktabs = TRUE) |>
+  kable_styling(latex_options = c("striped", "scale_down")) |>
+  add_header_above(c(" " = 1,
+                     "June" = 2,
+                     "July" = 2,
+                     "August" = 2,
+                     " " = 1)) |> 
+  pack_rows(index = c("Middle Brook" = 1,
+                      "Gambo River" = 1,
+                      "Northwest Brook, Alexander Bay" = 1,
+                      "Terra Nova River" = 2,
+                      "Salmon Cove River, Trinity Bay" = 2,
+                      "Shoal Harbour River, Trinity Bay" =2))
+
+```
+
+## Cellular Stations 2023
+
+```{r Clarenville, echo = FALSE, warning = FALSE, message = FALSE, fig.fullwidth = TRUE}
+rivers <- unique(hobo_closure2$River.Name[hobo_closure2$Detachment == "Clarenville"])
+
+for (i in seq_along(rivers)) {
+  
+  data <- hobo_closure2 |> 
+    filter(River.Name == rivers[i]) |> 
+    filter(!is.na(WaterTemperature_C))
+  
+  
+  
+  p <- ggplot(data) +
+       geom_rect(aes(xmin = closed, xmax = opened, ymin = -Inf, ymax = Inf), alpha = 0.2, fill = 'lightgrey') +
+  geom_line(data = data |> filter(EP == FALSE | is.na(EP)),
+                                  aes(x = Time, y = WaterTemperature_C, group = EPgroup), colour = 'black') +
+  geom_line(data = data |> filter(EP == TRUE),
+                                  aes(x = Time, y = WaterTemperature_C, group = EPgroup), colour = 'red') +   
+  geom_line(aes(x = Time, y = WaterLevel_meters*20), colour = 'blue') +
+  # geom_vline(aes(xintercept = closed), colour = 'red') +
+  # geom_vline(aes(xintercept = opened), colour = 'darkgreen') +
+ 
+  geom_hline(aes(yintercept = 20), colour = 'darkgrey', linetype = 'dashed') +
+    geom_point(aes(x = alarm, y = WaterTemperature_C), shape = 22, fill = 'red',size = 3, alpha = 0.6) +
+    geom_point(aes(x = cleared, y = 20), shape = 23, fill = 'red', size = 3, alpha = 0.6) +
+  scale_y_continuous(name = "Water Temperature (°C)",
+                     sec.axis = sec_axis(trans= ~./20, name = "Water Level (meters)"),
+                     lim = c(0,31)) +
+    facet_wrap(~Station, ncol = 1) +
+     ggtitle(paste(rivers[i], unique(data$Year[data$River.Name == rivers[i]]), sep = " - ")) +
+  theme_bw() +
+  scale_x_datetime(date_breaks = "1 week", date_labels = "%d %b", limits = c(as_datetime("2023-07-01 00:00:00"), as_datetime("2023-09-15 00:00:00")))  +
+  theme(axis.text.x = element_text(angle = 90, vjust=0.5))
+
+  print(p)
+    cat('\n\n')
+}
+
+
+```
+
+
+## 2023 Loggers
+
+```{r Clarenville 2023, echo = FALSE, warning = FALSE, message= FALSE, fig.fullwidth = TRUE}
+rivers <- unique(river_closures2$River.Name[river_closures2$Year == 2023 & river_closures2$Detachment == "Clarenville" & river_closures2$Time >= as_datetime("2023-07-01 00:00:00", tz = "America/St_Johns") & river_closures2$Time <= as_datetime("2023-09-15 00:00:00", tz = "America/St_Johns")])
+
+# rivers <- river_closures2 |> 
+#   filter(Year == 2023) |> 
+#   
+
+for (i in seq_along(rivers)) {
+  
+  data <- river_closures2 |> 
+    filter(Year == 2023) |> 
+    # filter(month(Time) >= 6) |> 
+    # filter(month(Time) <= 9) |> 
+    filter(River.Name == rivers[i]) |> 
+    filter(!is.na(Temp.C))
+  
+  
+  
+  p <- ggplot(data) +
+       geom_rect(aes(xmin = closed, xmax = opened, ymin = -Inf, ymax = Inf), alpha = 0.2, fill = 'lightgrey') +
+  geom_line(data = data |> filter(EP == FALSE | is.na(EP)),
+                                  aes(x = Time, y = Temp.C, group = EPgroup), colour = 'black') +
+  geom_line(data = data |> filter(EP == TRUE),
+                                  aes(x = Time, y = Temp.C, group = EPgroup), colour = 'red') +            
+  geom_line(aes(x = Time, y = Level.m*20), colour = 'blue') +
+  # geom_vline(aes(xintercept = closed), colour = 'red') +
+  # geom_vline(aes(xintercept = opened), colour = 'darkgreen') +
+  geom_hline(aes(yintercept = 20), colour = 'darkgrey', linetype = 'dashed') +
+    # geom_point(aes(x = alarm, y = WaterTemperature_C), shape = 22, fill = 'red',size = 3, alpha = 0.6) +
+    # geom_point(aes(x = cleared, y = 20), shape = 23, fill = 'red', size = 3, alpha = 0.6) +
+  scale_y_continuous(name = "Water Temperature (°C)",
+                     sec.axis = sec_axis(trans= ~./20, name = "Water Level (meters)"),
+                     lim = c(0,31)) +
+    facet_wrap(~Station) +
+    ggtitle(paste(rivers[i], unique(data$Year[data$River.Name == rivers[i]]), sep = " - ")) +
+  theme_bw() +
+  scale_x_datetime(date_breaks = "1 week", date_labels = "%d %b", limits = c(as_datetime("2023-07-01 00:00:00"), as_datetime("2023-09-15 00:00:00")))  +
+  theme(axis.text.x = element_text(angle = 90, vjust=0.5))
+
+  print(p)
+  cat('\n\n')
+}
+
+```
+
+## 2022 Loggers
+
+```{r Clarenville 2022, echo = FALSE, warning = FALSE, message= FALSE, fig.fullwidth = TRUE}
+
+rivers <- unique(river_closures2$River.Name[river_closures2$Year==2022 & river_closures2$Detachment == "Clarenville" & river_closures2$Time >= as_datetime("2022-07-01 00:00:00", tz = "America/St_Johns") & river_closures2$Time <= as_datetime("2022-09-15 00:00:00", tz = "America/St_Johns")] )
+
+rivers <- rivers[-1]
+
+for (i in seq_along(rivers)) {
+  
+  data <- river_closures2 |> 
+    filter(Year == 2022) |> 
+    filter(River.Name == rivers[i]) |> 
+    filter(!is.na(Temp.C))
+  
+  
+  
+  p <- ggplot(data) +
+       geom_rect(aes(xmin = closed, xmax = opened, ymin = -Inf, ymax = Inf), alpha = 0.2, fill = 'lightgrey') +
+  geom_line(data = data |> filter(EP == FALSE | is.na(EP)),
+                                  aes(x = Time, y = Temp.C, group = EPgroup), colour = 'black') +
+  geom_line(data = data |> filter(EP == TRUE),
+                                  aes(x = Time, y = Temp.C, group = EPgroup), colour = 'red') +            
+  geom_line(aes(x = Time, y = Level.m*20), colour = 'blue') +
+  # geom_vline(aes(xintercept = closed), colour = 'red') +
+  # geom_vline(aes(xintercept = opened), colour = 'darkgreen') +
+  geom_hline(aes(yintercept = 20), colour = 'darkgrey', linetype = 'dashed') +
+    # geom_point(aes(x = alarm, y = WaterTemperature_C), shape = 22, fill = 'red',size = 3, alpha = 0.6) +
+    # geom_point(aes(x = cleared, y = 20), shape = 23, fill = 'red', size = 3, alpha = 0.6) +
+  scale_y_continuous(name = "Water Temperature (°C)",
+                     sec.axis = sec_axis(trans= ~./20, name = "Water Level (meters)"),
+                     lim = c(0,31)) +
+    facet_wrap(~Station) +
+     ggtitle(paste(rivers[i], unique(data$Year[data$River.Name == rivers[i]]), sep = " - ")) +
+  theme_bw() +
+  scale_x_datetime(date_breaks = "1 week", date_labels = "%d %b", limits = c(as_datetime("2022-07-01 00:00:00"), as_datetime("2022-09-15 00:00:00")))  +
+  theme(axis.text.x = element_text(angle = 90, vjust=0.5))
+
+  print(p)
+  cat('\n\n')
+}
+
+```
+
+*****
+
+
+
+
+# Marystown
+
+```{r Marystown Map, echo = FALSE, warning = FALSE, message = FALSE, fig.width = 6, fig.height=6, fig.fullwidth = TRUE}
+
+
+ggplot(mapcan_sf) +
+  geom_sf() +
+  # geom_sf(data = b$osm_multipolygons, aes()) +
+   geom_point(data = river_closures2 |> 
+               filter(Detachment == "Marystown") |> 
+               distinct(River.Name, Lat, Long), aes( x = Long, y = Lat, shape = "Stand-alone Logger"),
+             size = 2, alpha = 0.85, colour = alpha('black', 1), fill = 'navy') +
+    geom_point(data = hobo_closure2 |> 
+               filter(Detachment == "Marystown") |> 
+               distinct(River.Name, lat, long), aes( x = long, y = lat, shape = "Weather Station"),
+             size = 2, alpha = 0.85, colour = alpha('black', 1), fill = 'darkred') +
+   xlim(-56.5, -52.9) +
+  ylim(46.7, 49) +
+  theme_bw() +
+  labs(x = "Latitude",
+       y = "Longitude",
+       title = "Marystown Detachment") +
+  theme(panel.grid = element_blank(),
+        axis.title = element_text(size = 11),
+        axis.text = element_text(size = 10)) +
+   scale_shape_manual(name = "Device",
+                     labels = c("Stand-alone Logger", "Weather Station"),
+                     values = c(21, 22)) +
+  guides(shape = guide_legend(override.aes = list(fill = c('navy', 'darkred'))))
+```
+```{r Marystown table, echo = FALSE, warning = FALSE, message= FALSE}
+kable(tabledata |> filter(Detachment == "Marystown") |> 
+        mutate(Range_Jun = paste(Min_Jun, "-", Max_Jun),
+               Range_Jul = paste(Min_Jul, "-", Max_Jul),
+               Range_Aug = paste(Min_Aug, "-", Max_Aug)) |> 
+        ## remove NA's
+        mutate(Range_Jun = replace(Range_Jun, Range_Jun == "NA - NA", NA),
+               Range_Jul = replace(Range_Jul, Range_Jul == "NA - NA", NA),
+               Range_Aug = replace(Range_Aug, Range_Aug == "NA - NA", NA)) |> 
+  dplyr::select(River.Name, River.Number, Year, 
+                Mean_Jun, Range_Jun,
+                Mean_Jul, Range_Jul,
+                Mean_Aug, Range_Aug,
+                days_closed) |>
+    arrange(River.Number, River.Name, Year) |> 
+    dplyr::select(-River.Number, -River.Name),
+  col.names = c("Year", "Mean (°C)", "Range (°C)", "Mean (°C)", "Range (°C)", "Mean (°C)", "Range (°C)", "Restricted angling days" ),
+  format = 'latex',
+  linesep = "",
+  align = 'c',
+  caption = "Water temperature summary for rivers in Marystown Detachment",
+  booktabs = TRUE) |>
+  kable_styling(latex_options = c("striped", "scale_down")) |>
+  add_header_above(c(" " = 1,
+                     "June" = 2,
+                     "July" = 2,
+                     "August" = 2,
+                     " " = 1)) |> 
+  pack_rows(index = c("Bay de l'Eau River" = 1,
+                      "Garnish River" = 1))
+
+```
+
+## Cellular Stations 2023
+
+```{r Marystown, echo = FALSE, warning = FALSE, message = FALSE, fig.fullwidth = TRUE}
+rivers <- unique(hobo_closure2$River.Name[hobo_closure2$Detachment == "Marystown"])
+
+for (i in seq_along(rivers)) {
+  
+  data <- hobo_closure2 |> 
+    filter(River.Name == rivers[i]) |> 
+    filter(!is.na(WaterTemperature_C))
+  
+  
+  
+  p <- ggplot(data) +
+       geom_rect(aes(xmin = closed, xmax = opened, ymin = -Inf, ymax = Inf), alpha = 0.2, fill = 'lightgrey') +
+  geom_line(data = data |> filter(EP == FALSE | is.na(EP)),
+                                  aes(x = Time, y = WaterTemperature_C, group = EPgroup), colour = 'black') +
+  geom_line(data = data |> filter(EP == TRUE),
+                                  aes(x = Time, y = WaterTemperature_C, group = EPgroup), colour = 'red') +   
+  geom_line(aes(x = Time, y = WaterLevel_meters*20), colour = 'blue') +
+  # geom_vline(aes(xintercept = closed), colour = 'red') +
+  # geom_vline(aes(xintercept = opened), colour = 'darkgreen') +
+ 
+  geom_hline(aes(yintercept = 20), colour = 'darkgrey', linetype = 'dashed') +
+    geom_point(aes(x = alarm, y = WaterTemperature_C), shape = 22, fill = 'red',size = 3, alpha = 0.6) +
+    geom_point(aes(x = cleared, y = 20), shape = 23, fill = 'red', size = 3, alpha = 0.6) +
+  scale_y_continuous(name = "Water Temperature (°C)",
+                     sec.axis = sec_axis(trans= ~./20, name = "Water Level (meters)"),
+                     lim = c(0,31)) +
+    facet_wrap(~Station, ncol = 1) +
+    ggtitle(paste(rivers[i], unique(data$Year[data$River.Name == rivers[i]]), sep = " - ")) +
+  theme_bw() +
+  scale_x_datetime(date_breaks = "1 week", date_labels = "%d %b", limits = c(as_datetime("2023-07-01 00:00:00"), as_datetime("2023-09-15 00:00:00")))  +
+  theme(axis.text.x = element_text(angle = 90, vjust=0.5))
+
+  print(p)
+  cat('\n\n')
+}
+
+
+```
+
+## 2023 Loggers
+
+```{r Marystown 2023, echo = FALSE, warning = FALSE, message= FALSE, fig.fullwidth = TRUE}
+rivers <- unique(river_closures2$River.Name[river_closures2$Year == 2023 & river_closures2$Detachment == "Marystown" & river_closures2$Time >= as_datetime("2023-07-01 00:00:00", tz = "America/St_Johns") & river_closures2$Time <= as_datetime("2023-09-15 00:00:00", tz = "America/St_Johns")])
+
+# rivers <- river_closures2 |> 
+#   filter(Year == 2023) |> 
+#   
+
+for (i in seq_along(rivers)) {
+  
+  data <- river_closures2 |> 
+    filter(Year == 2023) |> 
+    # filter(month(Time) >= 6) |> 
+    # filter(month(Time) <= 9) |> 
+    filter(River.Name == rivers[i]) |> 
+    filter(!is.na(Temp.C))
+  
+  
+  
+  p <- ggplot(data) +
+       geom_rect(aes(xmin = closed, xmax = opened, ymin = -Inf, ymax = Inf), alpha = 0.2, fill = 'lightgrey') +
+  geom_line(data = data |> filter(EP == FALSE | is.na(EP)),
+                                  aes(x = Time, y = Temp.C, group = EPgroup), colour = 'black') +
+  geom_line(data = data |> filter(EP == TRUE),
+                                  aes(x = Time, y = Temp.C, group = EPgroup), colour = 'red') +            
+  geom_line(aes(x = Time, y = Level.m*20), colour = 'blue') +
+  # geom_vline(aes(xintercept = closed), colour = 'red') +
+  # geom_vline(aes(xintercept = opened), colour = 'darkgreen') +
+  geom_hline(aes(yintercept = 20), colour = 'darkgrey', linetype = 'dashed') +
+    # geom_point(aes(x = alarm, y = WaterTemperature_C), shape = 22, fill = 'red',size = 3, alpha = 0.6) +
+    # geom_point(aes(x = cleared, y = 20), shape = 23, fill = 'red', size = 3, alpha = 0.6) +
+  scale_y_continuous(name = "Water Temperature (°C)",
+                     sec.axis = sec_axis(trans= ~./20, name = "Water Level (meters)"),
+                     lim = c(0,31)) +
+    facet_wrap(~Station) +
+    ggtitle(paste(rivers[i], unique(data$Year[data$River.Name == rivers[i]]), sep = " - ")) +
+  theme_bw() +
+  scale_x_datetime(date_breaks = "1 week", date_labels = "%d %b", limits = c(as_datetime("2023-07-01 00:00:00"), as_datetime("2023-09-15 00:00:00")))  +
+  theme(axis.text.x = element_text(angle = 90, vjust=0.5))
+
+  print(p)
+  cat('\n\n')
+}
+
+```
+
+
+****
+# Twillingate
+
+```{r TWillingate Map, echo = FALSE, warning = FALSE, message = FALSE, fig.width = 6, fig.height=6, fig.fullwidth = TRUE}
+
+ggplot(mapcan_sf) +
+  geom_sf() +
+  # geom_sf(data = b$osm_multipolygons, aes()) +
+   geom_point(data = river_closures2 |> 
+               filter(Detachment == "Twillingate") |> 
+               distinct(River.Name, Lat, Long), aes( x = Long, y = Lat, shape = "Stand-alone Logger"),
+             size = 2, alpha = 0.85, colour = alpha('black', 1), fill = 'navy') +
+    geom_point(data = hobo_closure2 |> 
+               filter(Detachment == "Twillingate") |> 
+               distinct(River.Name, lat, long), aes( x = long, y = lat, shape = "Weather Station"),
+             size = 2, alpha = 0.85, colour = alpha('black', 1), fill = 'darkred') +
+   xlim(-57, -54) +
+  ylim(48.5, 50) +
+  theme_bw() +
+  labs(x = "Latitude",
+       y = "Longitude",
+       title = "Twillingate Detachment") +
+  theme(panel.grid = element_blank(),
+        axis.title = element_text(size = 11),
+        axis.text = element_text(size = 10)) +
+   scale_shape_manual(name = "Device",
+                     labels = c("Stand-alone Logger", "Weather Station"),
+                     values = c(21, 22)) +
+  guides(shape = guide_legend(override.aes = list(fill = c('navy', 'darkred'))))
+```
+```{r Twillingate table, echo = FALSE, warning = FALSE, message= FALSE}
+kable(tabledata |> filter(Detachment == "Twillingate") |> 
+        mutate(Range_Jun = paste(Min_Jun, "-", Max_Jun),
+               Range_Jul = paste(Min_Jul, "-", Max_Jul),
+               Range_Aug = paste(Min_Aug, "-", Max_Aug)) |> 
+        ## remove NA's
+        mutate(Range_Jun = replace(Range_Jun, Range_Jun == "NA - NA", NA),
+               Range_Jul = replace(Range_Jul, Range_Jul == "NA - NA", NA),
+               Range_Aug = replace(Range_Aug, Range_Aug == "NA - NA", NA)) |> 
+   dplyr::select(River.Name, River.Number, Year, 
+                Mean_Jun, Range_Jun,
+                Mean_Jul, Range_Jul,
+                Mean_Aug, Range_Aug,
+                days_closed) |>
+    arrange(River.Number, River.Name, Year) |> 
+    dplyr::select(-River.Number, -River.Name),
+  col.names = c("Year", "Mean (°C)", "Range (°C)", "Mean (°C)", "Range (°C)", "Mean (°C)", "Range (°C)", "Restricted angling days" ),
+  format = 'latex',
+  align = 'c',
+  caption = "Water temperature summary for rivers in Twillingate Detachment",
+  linesep = "",
+  booktabs = TRUE) |>
+  kable_styling(latex_options = c("striped", "scale_down")) |>
+  add_header_above(c(" " = 1,
+                     "June" = 2,
+                     "July" = 2,
+                     "August" = 2,
+                     " " = 1)) |> 
+  pack_rows(index = c("Campbellton River" = 2,
+                      "Northwest Gander tributary" = 1,
+                      "Salmon Brook" = 1,
+                      "Salmon River" = 2))
+
+```
+
+
+## Cellular Stations 2023
+
+```{r Twillingate, echo = FALSE, warning = FALSE, message = FALSE, fig.fullwidth = TRUE}
+rivers <- unique(hobo_closure2$River.Name[hobo_closure2$Detachment == "Twillingate"])
+
+for (i in seq_along(rivers)) {
+  
+  data <- hobo_closure2 |> 
+    filter(River.Name == rivers[i]) |> 
+    filter(!is.na(WaterTemperature_C))
+  
+  
+  
+  p <- ggplot(data) +
+       geom_rect(aes(xmin = closed, xmax = opened, ymin = -Inf, ymax = Inf), alpha = 0.2, fill = 'lightgrey') +
+  geom_line(data = data |> filter(EP == FALSE | is.na(EP)),
+                                  aes(x = Time, y = WaterTemperature_C, group = EPgroup), colour = 'black') +
+  geom_line(data = data |> filter(EP == TRUE),
+                                  aes(x = Time, y = WaterTemperature_C, group = EPgroup), colour = 'red') +   
+  geom_line(aes(x = Time, y = WaterLevel_meters*20), colour = 'blue') +
+  # geom_vline(aes(xintercept = closed), colour = 'red') +
+  # geom_vline(aes(xintercept = opened), colour = 'darkgreen') +
+ 
+  geom_hline(aes(yintercept = 20), colour = 'darkgrey', linetype = 'dashed') +
+    geom_point(aes(x = alarm, y = WaterTemperature_C), shape = 22, fill = 'red',size = 3, alpha = 0.6) +
+    geom_point(aes(x = cleared, y = 20), shape = 23, fill = 'red', size = 3, alpha = 0.6) +
+  scale_y_continuous(name = "Water Temperature (°C)",
+                     sec.axis = sec_axis(trans= ~./20, name = "Water Level (meters)"),
+                     lim = c(0,31)) +
+    facet_wrap(~Station, ncol = 1) +
+    ggtitle(paste(rivers[i], unique(data$Year[data$River.Name == rivers[i]]), sep = " - ")) +
+  theme_bw() +
+  scale_x_datetime(date_breaks = "1 week", date_labels = "%d %b", limits = c(as_datetime("2023-07-01 00:00:00"), as_datetime("2023-09-15 00:00:00")))  +
+  theme(axis.text.x = element_text(angle = 90, vjust=0.5))
+
+  print(p)
+  cat('\n\n')
+}
+
+
+```
+
+## 2023 Loggers
+
+```{r Twillingate 2023, echo = FALSE, warning = FALSE, message= FALSE, fig.fullwidth = TRUE}
+rivers <- unique(river_closures2$River.Name[river_closures2$Year == 2023 & river_closures2$Detachment == "Twillingate" & river_closures2$Time >= as_datetime("2023-07-01 00:00:00", tz = "America/St_Johns") & river_closures2$Time <= as_datetime("2023-09-15 00:00:00", tz = "America/St_Johns")])
+
+# rivers <- river_closures2 |> 
+#   filter(Year == 2023) |> 
+#   
+
+for (i in seq_along(rivers)) {
+  
+  data <- river_closures2 |> 
+    filter(Year == 2023) |> 
+    # filter(month(Time) >= 6) |> 
+    # filter(month(Time) <= 9) |> 
+    filter(River.Name == rivers[i]) |> 
+    filter(!is.na(Temp.C))
+  
+  
+  
+  p <- ggplot(data) +
+       geom_rect(aes(xmin = closed, xmax = opened, ymin = -Inf, ymax = Inf), alpha = 0.2, fill = 'lightgrey') +
+  geom_line(data = data |> filter(EP == FALSE | is.na(EP)),
+                                  aes(x = Time, y = Temp.C, group = EPgroup), colour = 'black') +
+  geom_line(data = data |> filter(EP == TRUE),
+                                  aes(x = Time, y = Temp.C, group = EPgroup), colour = 'red') +            
+  geom_line(aes(x = Time, y = Level.m*20), colour = 'blue') +
+  # geom_vline(aes(xintercept = closed), colour = 'red') +
+  # geom_vline(aes(xintercept = opened), colour = 'darkgreen') +
+  geom_hline(aes(yintercept = 20), colour = 'darkgrey', linetype = 'dashed') +
+    # geom_point(aes(x = alarm, y = WaterTemperature_C), shape = 22, fill = 'red',size = 3, alpha = 0.6) +
+    # geom_point(aes(x = cleared, y = 20), shape = 23, fill = 'red', size = 3, alpha = 0.6) +
+  scale_y_continuous(name = "Water Temperature (°C)",
+                     sec.axis = sec_axis(trans= ~./20, name = "Water Level (meters)"),
+                     lim = c(0,31)) +
+    facet_wrap(~Station) +
+     ggtitle(paste(rivers[i], unique(data$Year[data$River.Name == rivers[i]]), sep = " - ")) +
+  theme_bw() +
+  scale_x_datetime(date_breaks = "1 week", date_labels = "%d %b", limits = c(as_datetime("2023-07-01 00:00:00"), as_datetime("2023-09-15 00:00:00")))  +
+  theme(axis.text.x = element_text(angle = 90, vjust=0.5))
+
+  print(p)
+  cat('\n\n')
+}
+
+```
+
+## 2022 Loggers
+
+```{r Twillingate 2022, echo = FALSE, warning = FALSE, message= FALSE, fig.fullwidth = TRUE}
+
+rivers <- unique(river_closures2$River.Name[river_closures2$Year==2022 & river_closures2$Detachment == "Twillingate" & river_closures2$Time >= as_datetime("2022-07-01 00:00:00", tz = "America/St_Johns") & river_closures2$Time <= as_datetime("2022-09-15 00:00:00", tz = "America/St_Johns")] )
+
+rivers <- rivers[-1]
+
+for (i in seq_along(rivers)) {
+  
+  data <- river_closures2 |> 
+    filter(Year == 2022) |> 
+    filter(River.Name == rivers[i]) |> 
+    filter(!is.na(Temp.C))
+  
+  
+  
+  p <- ggplot(data) +
+       geom_rect(aes(xmin = closed, xmax = opened, ymin = -Inf, ymax = Inf), alpha = 0.2, fill = 'lightgrey') +
+  geom_line(data = data |> filter(EP == FALSE | is.na(EP)),
+                                  aes(x = Time, y = Temp.C, group = EPgroup), colour = 'black') +
+  geom_line(data = data |> filter(EP == TRUE),
+                                  aes(x = Time, y = Temp.C, group = EPgroup), colour = 'red') +            
+  geom_line(aes(x = Time, y = Level.m*20), colour = 'blue') +
+  # geom_vline(aes(xintercept = closed), colour = 'red') +
+  # geom_vline(aes(xintercept = opened), colour = 'darkgreen') +
+  geom_hline(aes(yintercept = 20), colour = 'darkgrey', linetype = 'dashed') +
+    # geom_point(aes(x = alarm, y = WaterTemperature_C), shape = 22, fill = 'red',size = 3, alpha = 0.6) +
+    # geom_point(aes(x = cleared, y = 20), shape = 23, fill = 'red', size = 3, alpha = 0.6) +
+  scale_y_continuous(name = "Water Temperature (°C)",
+                     sec.axis = sec_axis(trans= ~./20, name = "Water Level (meters)"),
+                     lim = c(0,31)) +
+    facet_wrap(~Station) +
+    ggtitle(paste(rivers[i], unique(data$Year[data$River.Name == rivers[i]]), sep = " - ")) +
+  theme_bw() +
+  scale_x_datetime(date_breaks = "1 week", date_labels = "%d %b", limits = c(as_datetime("2022-07-01 00:00:00"), as_datetime("2022-09-15 00:00:00")))  +
+  theme(axis.text.x = element_text(angle = 90, vjust=0.5))
+
+  print(p)
+  cat('\n\n')
+}
+
+```
+
+****
+# Springdale
+
+```{r Springdale Map, echo = FALSE, warning = FALSE, message = FALSE, fig.width = 6, fig.height=6, fig.fullwidth = TRUE}
+
+
+ggplot(mapcan_sf) +
+  geom_sf() +
+  # geom_sf(data = b$osm_multipolygons, aes()) +
+   geom_point(data = river_closures2 |> 
+               filter(Detachment == "Springdale") |> 
+               distinct(River.Name, Lat, Long), aes( x = Long, y = Lat, shape = "Stand-alone Logger"),
+             size = 2, alpha = 0.85, colour = alpha('black', 1), fill = 'navy') +
+    geom_point(data = hobo_closure2 |> 
+               filter(Detachment == "Springdale") |> 
+               distinct(River.Name, lat, long), aes( x = long, y = lat, shape = "Weather Station"),
+             size = 2, alpha = 0.85, colour = alpha('black', 1), fill = 'darkred') +
+  xlim(-59, -54.5) +
+  ylim(48, 51.5) +
+  theme_bw() +
+  labs(x = "Latitude",
+       y = "Longitude",
+       title = "Springdale Detachment") +
+  theme(panel.grid = element_blank(),
+        axis.title = element_text(size = 11),
+        axis.text = element_text(size = 10)) +
+   scale_shape_manual(name = "Device",
+                     labels = c("Stand-alone Logger", "Weather Station"),
+                     values = c(21, 22)) +
+  guides(shape = guide_legend(override.aes = list(fill = c('navy', 'darkred'))))
+```
+```{r Springdale table, echo = FALSE, warning = FALSE, message= FALSE}
+kable(tabledata |> filter(Detachment == "Springdale") |> 
+        mutate(Range_Jun = paste(Min_Jun, "-", Max_Jun),
+               Range_Jul = paste(Min_Jul, "-", Max_Jul),
+               Range_Aug = paste(Min_Aug, "-", Max_Aug)) |> 
+        ## remove NA's
+        mutate(Range_Jun = replace(Range_Jun, Range_Jun == "NA - NA", NA),
+               Range_Jul = replace(Range_Jul, Range_Jul == "NA - NA", NA),
+               Range_Aug = replace(Range_Aug, Range_Aug == "NA - NA", NA)) |> 
+  dplyr::select(River.Name, River.Number, Year, 
+                Mean_Jun, Range_Jun,
+                Mean_Jul, Range_Jul,
+                Mean_Aug, Range_Aug,
+                days_closed) |>
+    arrange(River.Number, River.Name, Year) |> 
+    dplyr::select(-River.Number, -River.Name),
+  col.names = c("Year", "Mean (°C)", "Range (°C)", "Mean (°C)", "Range (°C)", "Mean (°C)", "Range (°C)", "Restricted angling days" ),
+  format = 'latex',
+  linesep = "",
+  align = 'c',
+  caption = "Water temperature summary for rivers in Springdale Detachment",
+  booktabs = TRUE) |>
+  kable_styling(latex_options = c("striped", "scale_down")) |>
+  add_header_above(c(" " = 1,
+                     "June" = 2,
+                     "July" = 2,
+                     "August" = 2,
+                     " " = 1)) |> 
+  pack_rows(index = c("Burlington River" = 1,
+                      "Tommy's Arm River" = 1,
+                      "Peter's River, Bay of Exploits" = 2,
+                      "Exploits River" = 2,
+                      "Stoney Brook" = 2,
+                      "Rattling Brook" = 2))
+
+```
+
+## Cellular Stations 2023
+
+```{r Springdale, echo = FALSE, warning = FALSE, message = FALSE, fig.fullwidth = TRUE}
+rivers <- unique(hobo_closure2$River.Name[hobo_closure2$Detachment == "Springdale"])
+
+for (i in seq_along(rivers)) {
+  
+  data <- hobo_closure2 |> 
+    filter(River.Name == rivers[i]) |> 
+    filter(!is.na(WaterTemperature_C))
+  
+  
+  
+  p <- ggplot(data) +
+       geom_rect(aes(xmin = closed, xmax = opened, ymin = -Inf, ymax = Inf), alpha = 0.2, fill = 'lightgrey') +
+  geom_line(data = data |> filter(EP == FALSE | is.na(EP)),
+                                  aes(x = Time, y = WaterTemperature_C, group = EPgroup), colour = 'black') +
+  geom_line(data = data |> filter(EP == TRUE),
+                                  aes(x = Time, y = WaterTemperature_C, group = EPgroup), colour = 'red') +   
+  geom_line(aes(x = Time, y = WaterLevel_meters*20), colour = 'blue') +
+  # geom_vline(aes(xintercept = closed), colour = 'red') +
+  # geom_vline(aes(xintercept = opened), colour = 'darkgreen') +
+ 
+  geom_hline(aes(yintercept = 20), colour = 'darkgrey', linetype = 'dashed') +
+    geom_point(aes(x = alarm, y = WaterTemperature_C), shape = 22, fill = 'red',size = 3, alpha = 0.6) +
+    geom_point(aes(x = cleared, y = 20), shape = 23, fill = 'red', size = 3, alpha = 0.6) +
+  scale_y_continuous(name = "Water Temperature (°C)",
+                     sec.axis = sec_axis(trans= ~./20, name = "Water Level (meters)"),
+                     lim = c(0,31)) +
+    facet_wrap(~Station, ncol = 1) +
+     ggtitle(paste(rivers[i], unique(data$Year[data$River.Name == rivers[i]]), sep = " - ")) +
+  theme_bw() +
+  scale_x_datetime(date_breaks = "1 week", date_labels = "%d %b", limits = c(as_datetime("2023-07-01 00:00:00"), as_datetime("2023-09-15 00:00:00")))  +
+  theme(axis.text.x = element_text(angle = 90, vjust=0.5))
+
+  print(p)
+  cat('\n\n')
+}
+
+
+```
+
+## 2023 Loggers
+
+```{r Springdale 2023, echo = FALSE, warning = FALSE, message= FALSE, fig.fullwidth = TRUE}
+rivers <- unique(river_closures2$River.Name[river_closures2$Year == 2023 & river_closures2$Detachment == "Springdale" & river_closures2$Time >= as_datetime("2023-07-01 00:00:00", tz = "America/St_Johns") & river_closures2$Time <= as_datetime("2023-09-15 00:00:00", tz = "America/St_Johns")])
+
+# rivers <- river_closures2 |> 
+#   filter(Year == 2023) |> 
+#   
+
+for (i in seq_along(rivers)) {
+  
+  data <- river_closures2 |> 
+    filter(Year == 2023) |> 
+    # filter(month(Time) >= 6) |> 
+    # filter(month(Time) <= 9) |> 
+    filter(River.Name == rivers[i]) |> 
+    filter(!is.na(Temp.C))
+  
+  
+  
+  p <- ggplot(data) +
+       geom_rect(aes(xmin = closed, xmax = opened, ymin = -Inf, ymax = Inf), alpha = 0.2, fill = 'lightgrey') +
+  geom_line(data = data |> filter(EP == FALSE | is.na(EP)),
+                                  aes(x = Time, y = Temp.C, group = EPgroup), colour = 'black') +
+  geom_line(data = data |> filter(EP == TRUE),
+                                  aes(x = Time, y = Temp.C, group = EPgroup), colour = 'red') +            
+  geom_line(aes(x = Time, y = Level.m*20), colour = 'blue') +
+  # geom_vline(aes(xintercept = closed), colour = 'red') +
+  # geom_vline(aes(xintercept = opened), colour = 'darkgreen') +
+  geom_hline(aes(yintercept = 20), colour = 'darkgrey', linetype = 'dashed') +
+    # geom_point(aes(x = alarm, y = WaterTemperature_C), shape = 22, fill = 'red',size = 3, alpha = 0.6) +
+    # geom_point(aes(x = cleared, y = 20), shape = 23, fill = 'red', size = 3, alpha = 0.6) +
+  scale_y_continuous(name = "Water Temperature (°C)",
+                     sec.axis = sec_axis(trans= ~./20, name = "Water Level (meters)"),
+                     lim = c(0,31)) +
+    facet_wrap(~Station) +
+    ggtitle(paste(rivers[i], unique(data$Year[data$River.Name == rivers[i]]), sep = " - ")) +
+  theme_bw() +
+  scale_x_datetime(date_breaks = "1 week", date_labels = "%d %b", limits = c(as_datetime("2023-07-01 00:00:00"), as_datetime("2023-09-15 00:00:00")))  +
+  theme(axis.text.x = element_text(angle = 90, vjust=0.5))
+
+  print(p)
+  cat('\n\n')
+}
+
+```
+
+## 2022 Loggers
+
+```{r Springdale 2022, echo = FALSE, warning = FALSE, message= FALSE,  fig.fullwidth = TRUE}
+
+rivers <- unique(river_closures2$River.Name[river_closures2$Year==2022 & river_closures2$Detachment == "Springdale" & river_closures2$Time >= as_datetime("2022-07-01 00:00:00", tz = "America/St_Johns") & river_closures2$Time <= as_datetime("2022-09-15 00:00:00", tz = "America/St_Johns")] )
+
+rivers <- rivers[-1]
+
+for (i in seq_along(rivers)) {
+  
+  data <- river_closures2 |> 
+    filter(Year == 2022) |> 
+    filter(River.Name == rivers[i]) |> 
+    filter(!is.na(Temp.C))
+  
+  
+  
+  p <- ggplot(data) +
+       geom_rect(aes(xmin = closed, xmax = opened, ymin = -Inf, ymax = Inf), alpha = 0.2, fill = 'lightgrey') +
+  geom_line(data = data |> filter(EP == FALSE | is.na(EP)),
+                                  aes(x = Time, y = Temp.C, group = EPgroup), colour = 'black') +
+  geom_line(data = data |> filter(EP == TRUE),
+                                  aes(x = Time, y = Temp.C, group = EPgroup), colour = 'red') +            
+  # geom_line(aes(x = Time, y = Level.m*20), colour = 'blue') +
+  # geom_vline(aes(xintercept = closed), colour = 'red') +
+  # geom_vline(aes(xintercept = opened), colour = 'darkgreen') +
+  geom_hline(aes(yintercept = 20), colour = 'darkgrey', linetype = 'dashed') +
+    # geom_point(aes(x = alarm, y = WaterTemperature_C), shape = 22, fill = 'red',size = 3, alpha = 0.6) +
+    # geom_point(aes(x = cleared, y = 20), shape = 23, fill = 'red', size = 3, alpha = 0.6) +
+  scale_y_continuous(name = "Water Temperature (°C)",
+                     sec.axis = sec_axis(trans= ~./20, name = "Water Level (meters)"),
+                     lim = c(0,31)) +
+    facet_wrap(~Station) +
+    ggtitle(paste(rivers[i], unique(data$Year[data$River.Name == rivers[i]]), sep = " - ")) +
+  theme_bw() +
+  scale_x_datetime(date_breaks = "1 week", date_labels = "%d %b", limits = c(as_datetime("2022-07-01 00:00:00"), as_datetime("2022-09-15 00:00:00")))  +
+  theme(axis.text.x = element_text(angle = 90, vjust=0.5))
+
+  print(p)
+  cat('\n\n')
+}
+
+```
+
+****
+
+# Stephenville
+
+```{r Stephenville Map, echo = FALSE, warning = FALSE, message = FALSE, fig.width = 6, fig.height=6, fig.fullwidth = TRUE}
+
+
+ggplot(mapcan_sf) +
+  geom_sf() +
+  # geom_sf(data = b$osm_multipolygons, aes()) +
+   geom_point(data = river_closures2 |> 
+               filter(Detachment == "Stephenville") |> 
+               distinct(River.Name, Lat, Long), aes( x = Long, y = Lat, shape = "Stand-alone Logger"),
+             size = 2, alpha = 0.85, colour = alpha('black', 1), fill = 'navy') +
+    geom_point(data = hobo_closure2 |> 
+               filter(Detachment == "Stephenville") |> 
+               distinct(River.Name, lat, long), aes( x = long, y = lat, shape = "Weather Station"),
+             size = 2, alpha = 0.85, colour = alpha('black', 1), fill = 'darkred') +
+  xlim(-61.1, -57) +
+  ylim(46.7, 50) +
+  theme_bw() +
+  labs(x = "Latitude",
+       y = "Longitude",
+       title = "Stephenville Detachment") +
+  theme(panel.grid = element_blank(),
+        axis.title = element_text(size = 11),
+        axis.text = element_text(size = 10)) +
+   scale_shape_manual(name = "Device",
+                     labels = c("Stand-alone Logger", "Weather Station"),
+                     values = c(21, 22)) +
+  guides(shape = guide_legend(override.aes = list(fill = c('navy', 'darkred'))))
+
+```
+```{r Stephenville table, echo = FALSE, warning = FALSE, message= FALSE}
+kable(tabledata |> filter(Detachment == "Stephenville") |> 
+        mutate(Range_Jun = paste(Min_Jun, "-", Max_Jun),
+               Range_Jul = paste(Min_Jul, "-", Max_Jul),
+               Range_Aug = paste(Min_Aug, "-", Max_Aug)) |> 
+        ## remove NA's
+        mutate(Range_Jun = replace(Range_Jun, Range_Jun == "NA - NA", NA),
+               Range_Jul = replace(Range_Jul, Range_Jul == "NA - NA", NA),
+               Range_Aug = replace(Range_Aug, Range_Aug == "NA - NA", NA)) |> 
+   dplyr::select(River.Name, River.Number, Year, 
+                Mean_Jun, Range_Jun,
+                Mean_Jul, Range_Jul,
+                Mean_Aug, Range_Aug,
+                days_closed) |>
+    arrange(River.Number, River.Name, Year) |> 
+    dplyr::select(-River.Number, -River.Name),
+  col.names = c("Year", "Mean (°C)", "Range (°C)", "Mean (°C)", "Range (°C)", "Mean (°C)", "Range (°C)", "Restricted angling days" ),
+  format = 'latex',
+  align = 'c',
+  caption = "Water temperature summary for rivers in Stephenville Detachment",
+  linesep = "",
+  booktabs = TRUE) |>
+  kable_styling(latex_options = c("striped", "scale_down")) |>
+  add_header_above(c(" " = 1,
+                     "June" = 2,
+                     "July" = 2,
+                     "August" = 2,
+                     " " = 1)) |> 
+  pack_rows(index = c("South Branch of Great Codroy" = 1,
+                      "Highlands River" = 1,
+                      "Harry's River" = 1))
+
+```
+
+## Cellular Stations 2023
+
+```{r Stephenville, echo = FALSE, warning = FALSE, message = FALSE, fig.fullwidth = TRUE}
+rivers <- unique(hobo_closure2$River.Name[hobo_closure2$Detachment == "Stephenville"])
+
+for (i in seq_along(rivers)) {
+  
+  data <- hobo_closure2 |> 
+    filter(River.Name == rivers[i]) |> 
+    filter(!is.na(WaterTemperature_C))
+  
+  
+  
+  p <- ggplot(data) +
+       geom_rect(aes(xmin = closed, xmax = opened, ymin = -Inf, ymax = Inf), alpha = 0.2, fill = 'lightgrey') +
+  geom_line(data = data |> filter(EP == FALSE | is.na(EP)),
+                                  aes(x = Time, y = WaterTemperature_C, group = EPgroup), colour = 'black') +
+  geom_line(data = data |> filter(EP == TRUE),
+                                  aes(x = Time, y = WaterTemperature_C, group = EPgroup), colour = 'red') +   
+  geom_line(aes(x = Time, y = WaterLevel_meters*20), colour = 'blue') +
+  # geom_vline(aes(xintercept = closed), colour = 'red') +
+  # geom_vline(aes(xintercept = opened), colour = 'darkgreen') +
+ 
+  geom_hline(aes(yintercept = 20), colour = 'darkgrey', linetype = 'dashed') +
+    geom_point(aes(x = alarm, y = WaterTemperature_C), shape = 22, fill = 'red',size = 3, alpha = 0.6) +
+    geom_point(aes(x = cleared, y = 20), shape = 23, fill = 'red', size = 3, alpha = 0.6) +
+  scale_y_continuous(name = "Water Temperature (°C)",
+                     sec.axis = sec_axis(trans= ~./20, name = "Water Level (meters)"),
+                     lim = c(0,31)) +
+    facet_wrap(~Station, ncol = 1) +
+    ggtitle(paste(rivers[i], unique(data$Year[data$River.Name == rivers[i]]), sep = " - ")) +
+  theme_bw() +
+  scale_x_datetime(date_breaks = "1 week", date_labels = "%d %b", limits = c(as_datetime("2023-07-01 00:00:00"), as_datetime("2023-09-15 00:00:00")))  +
+  theme(axis.text.x = element_text(angle = 90, vjust=0.5))
+
+  print(p)
+  cat('\n\n')
+}
+
+
+```
+
+## 2023 Loggers
+
+```{r Stephenville 2023, echo = FALSE, warning = FALSE, message= FALSE, fig.fullwidth = TRUE}
+rivers <- unique(river_closures2$River.Name[river_closures2$Year == 2023 & river_closures2$Detachment == "Stephenville" & river_closures2$Time >= as_datetime("2023-07-01 00:00:00", tz = "America/St_Johns") & river_closures2$Time <= as_datetime("2023-09-15 00:00:00", tz = "America/St_Johns")])
+
+# rivers <- river_closures2 |> 
+#   filter(Year == 2023) |> 
+#   
+
+for (i in seq_along(rivers)) {
+  
+  data <- river_closures2 |> 
+    filter(Year == 2023) |> 
+    # filter(month(Time) >= 6) |> 
+    # filter(month(Time) <= 9) |> 
+    filter(River.Name == rivers[i]) |> 
+    filter(!is.na(Temp.C))
+  
+  
+  
+  p <- ggplot(data) +
+       geom_rect(aes(xmin = closed, xmax = opened, ymin = -Inf, ymax = Inf), alpha = 0.2, fill = 'lightgrey') +
+  geom_line(data = data |> filter(EP == FALSE | is.na(EP)),
+                                  aes(x = Time, y = Temp.C, group = EPgroup), colour = 'black') +
+  geom_line(data = data |> filter(EP == TRUE),
+                                  aes(x = Time, y = Temp.C, group = EPgroup), colour = 'red') +            
+  geom_line(aes(x = Time, y = Level.m*20), colour = 'blue') +
+  # geom_vline(aes(xintercept = closed), colour = 'red') +
+  # geom_vline(aes(xintercept = opened), colour = 'darkgreen') +
+  geom_hline(aes(yintercept = 20), colour = 'darkgrey', linetype = 'dashed') +
+    # geom_point(aes(x = alarm, y = WaterTemperature_C), shape = 22, fill = 'red',size = 3, alpha = 0.6) +
+    # geom_point(aes(x = cleared, y = 20), shape = 23, fill = 'red', size = 3, alpha = 0.6) +
+  scale_y_continuous(name = "Water Temperature (°C)",
+                     sec.axis = sec_axis(trans= ~./20, name = "Water Level (meters)"),
+                     lim = c(0,31)) +
+    facet_wrap(~Station) +
+    ggtitle(paste(rivers[i], unique(data$Year[data$River.Name == rivers[i]]), sep = " - ")) +
+  theme_bw() +
+  scale_x_datetime(date_breaks = "1 week", date_labels = "%d %b", limits = c(as_datetime("2023-07-01 00:00:00"), as_datetime("2023-09-15 00:00:00")))  +
+  theme(axis.text.x = element_text(angle = 90, vjust=0.5))
+
+  print(p)
+  cat('\n\n')
+}
+
+```
+
+## 2022 Loggers
+
+```{r Stephenville 2022, echo = FALSE, warning = FALSE, message= FALSE, fig.fullwidth = TRUE}
+
+rivers <- unique(river_closures2$River.Name[river_closures2$Year==2022 & river_closures2$Detachment == "Stephenville" & river_closures2$Time >= as_datetime("2022-07-01 00:00:00", tz = "America/St_Johns") & river_closures2$Time <= as_datetime("2022-09-15 00:00:00", tz = "America/St_Johns")] )
+
+rivers <- rivers[-1]
+
+for (i in seq_along(rivers)) {
+  
+  data <- river_closures2 |> 
+    filter(Year == 2022) |> 
+    filter(River.Name == rivers[i]) |> 
+    filter(!is.na(Temp.C))
+  
+  
+  
+  p <- ggplot(data) +
+       geom_rect(aes(xmin = closed, xmax = opened, ymin = -Inf, ymax = Inf), alpha = 0.2, fill = 'lightgrey') +
+  geom_line(data = data |> filter(EP == FALSE | is.na(EP)),
+                                  aes(x = Time, y = Temp.C, group = EPgroup), colour = 'black') +
+  geom_line(data = data |> filter(EP == TRUE),
+                                  aes(x = Time, y = Temp.C, group = EPgroup), colour = 'red') +            
+  geom_line(aes(x = Time, y = Level.m*20), colour = 'blue') +
+  # geom_vline(aes(xintercept = closed), colour = 'red') +
+  # geom_vline(aes(xintercept = opened), colour = 'darkgreen') +
+  geom_hline(aes(yintercept = 20), colour = 'darkgrey', linetype = 'dashed') +
+    # geom_point(aes(x = alarm, y = WaterTemperature_C), shape = 22, fill = 'red',size = 3, alpha = 0.6) +
+    # geom_point(aes(x = cleared, y = 20), shape = 23, fill = 'red', size = 3, alpha = 0.6) +
+  scale_y_continuous(name = "Water Temperature (°C)",
+                     sec.axis = sec_axis(trans= ~./20, name = "Water Level (meters)"),
+                     lim = c(0,31)) +
+    facet_wrap(~Station) +
+     ggtitle(paste(rivers[i], unique(data$Year[data$River.Name == rivers[i]]), sep = " - ")) +
+  theme_bw() +
+  scale_x_datetime(date_breaks = "1 week", date_labels = "%d %b", limits = c(as_datetime("2022-07-01 00:00:00"), as_datetime("2022-09-15 00:00:00")))  +
+  theme(axis.text.x = element_text(angle = 90, vjust=0.5))
+
+  print(p)
+  cat('\n\n')
+}
+
+```
+
+
+****
+
+# Goose Bay
+
+```{r Goose Bay Map, echo = FALSE, warning = FALSE, message = FALSE, fig.width = 6, fig.height=6, fig.fullwidth = TRUE}
+
+
+ggplot(mapcan_sf) +
+  geom_sf() +
+  # geom_sf(data = b$osm_multipolygons, aes()) +
+   geom_point(data = river_closures2 |> 
+               filter(Detachment == "Goose Bay") |> 
+               distinct(River.Name, Lat, Long), aes( x = Long, y = Lat, shape = "Stand-alone Logger"),
+             size = 2, alpha = 0.85, colour = alpha('black', 1), fill = 'navy') +
+    geom_point(data = hobo_closure2 |> 
+               filter(Detachment == "Goose Bay") |> 
+               distinct(River.Name, lat, long), aes( x = long, y = lat, shape = "Weather Station"),
+             size = 2, alpha = 0.85, colour = alpha('black', 1), fill = 'darkred') +
+   xlim(-61.1, -55) +
+  ylim(52, 55.65) +
+  theme_bw() +
+  labs(x = "Latitude",
+       y = "Longitude",
+       title = "Goose Bay Detachment") +
+  theme(panel.grid = element_blank(),
+        axis.title = element_text(size = 11),
+        axis.text = element_text(size = 10)) +
+   scale_shape_manual(name = "Device",
+                     labels = c("Stand-alone Logger", "Weather Station"),
+                     values = c(21, 22)) +
+  guides(shape = guide_legend(override.aes = list(fill = c('navy', 'darkred'))))
+```
+```{r Goose Bay table, echo = FALSE, warning = FALSE, message= FALSE}
+kable(tabledata |> filter(Detachment == "Goose Bay") |> 
+        mutate(Range_Jun = paste(Min_Jun, "-", Max_Jun),
+               Range_Jul = paste(Min_Jul, "-", Max_Jul),
+               Range_Aug = paste(Min_Aug, "-", Max_Aug)) |> 
+        ## remove NA's
+        mutate(Range_Jun = replace(Range_Jun, Range_Jun == "NA - NA", NA),
+               Range_Jul = replace(Range_Jul, Range_Jul == "NA - NA", NA),
+               Range_Aug = replace(Range_Aug, Range_Aug == "NA - NA", NA)) |> 
+  dplyr::select(River.Name, River.Number, Year, 
+                Mean_Jun, Range_Jun,
+                Mean_Jul, Range_Jul,
+                Mean_Aug, Range_Aug,
+                days_closed) |>
+    arrange(River.Number, River.Name, Year) |> 
+    dplyr::select(-River.Number, -River.Name),
+  col.names = c("Year", "Mean (°C)", "Range (°C)", "Mean (°C)", "Range (°C)", "Mean (°C)", "Range (°C)", "Restricted angling days" ),
+  format = 'latex',
+  linesep = "",
+  align = 'c',
+  caption = "Water temperature summary for rivers in Goose Bay Detachment",
+  booktabs = TRUE) |>
+  kable_styling(latex_options = c("striped", "scale_down")) |>
+  add_header_above(c(" " = 1,
+                     "June" = 2,
+                     "July" = 2,
+                     "August" = 2,
+                     " " = 1)) |> 
+  pack_rows(index = c("Char Book" = 2,
+                      "Hunt River" = 2,
+                      "Eagle River" = 1,
+                      "Shinney's River" = 2))
+
+```
+
+## Cellular Stations 2023
+
+```{r Goose Bay, echo = FALSE, warning = FALSE, message = FALSE, fig.fullwidth = TRUE}
+rivers <- unique(hobo_closure2$River.Name[hobo_closure2$Detachment == "Goose Bay"])
+
+for (i in seq_along(rivers)) {
+  
+  data <- hobo_closure2 |> 
+    filter(River.Name == rivers[i]) |> 
+    filter(!is.na(WaterTemperature_C))
+  
+  
+  
+  p <- ggplot(data) +
+       geom_rect(aes(xmin = closed, xmax = opened, ymin = -Inf, ymax = Inf), alpha = 0.2, fill = 'lightgrey') +
+  geom_line(data = data |> filter(EP == FALSE | is.na(EP)),
+                                  aes(x = Time, y = WaterTemperature_C, group = EPgroup), colour = 'black') +
+  geom_line(data = data |> filter(EP == TRUE),
+                                  aes(x = Time, y = WaterTemperature_C, group = EPgroup), colour = 'red') +   
+  geom_line(aes(x = Time, y = WaterLevel_meters*20), colour = 'blue') +
+  # geom_vline(aes(xintercept = closed), colour = 'red') +
+  # geom_vline(aes(xintercept = opened), colour = 'darkgreen') +
+ 
+  geom_hline(aes(yintercept = 20), colour = 'darkgrey', linetype = 'dashed') +
+    geom_point(aes(x = alarm, y = WaterTemperature_C), shape = 22, fill = 'red',size = 3, alpha = 0.6) +
+    geom_point(aes(x = cleared, y = 20), shape = 23, fill = 'red', size = 3, alpha = 0.6) +
+  scale_y_continuous(name = "Water Temperature (°C)",
+                     sec.axis = sec_axis(trans= ~./20, name = "Water Level (meters)"),
+                     lim = c(0,31)) +
+    facet_wrap(~Station, ncol = 1) +
+     ggtitle(paste(rivers[i], unique(data$Year[data$River.Name == rivers[i]]), sep = " - ")) +
+  theme_bw() +
+  scale_x_datetime(date_breaks = "1 week", date_labels = "%d %b", limits = c(as_datetime("2023-07-01 00:00:00"), as_datetime("2023-09-15 00:00:00")))  +
+  theme(axis.text.x = element_text(angle = 90, vjust=0.5))
+
+  print(p)
+  cat('\n\n')
+}
+
+
+```
+
+## 2023 Loggers
+
+```{r Goose Bay 2023, echo = FALSE, warning = FALSE, message= FALSE, fig.fullwidth = TRUE}
+rivers <- unique(river_closures2$River.Name[river_closures2$Year == 2023 & river_closures2$Detachment == "Goose Bay" & river_closures2$Time >= as_datetime("2023-07-01 00:00:00", tz = "America/St_Johns") & river_closures2$Time <= as_datetime("2023-09-15 00:00:00", tz = "America/St_Johns")])
+
+# rivers <- river_closures2 |> 
+#   filter(Year == 2023) |> 
+#   
+
+for (i in seq_along(rivers)) {
+  
+  data <- river_closures2 |> 
+    filter(Year == 2023) |> 
+    # filter(month(Time) >= 6) |> 
+    # filter(month(Time) <= 9) |> 
+    filter(River.Name == rivers[i]) |> 
+    filter(!is.na(Temp.C))
+  
+  
+  
+  p <- ggplot(data) +
+       geom_rect(aes(xmin = closed, xmax = opened, ymin = -Inf, ymax = Inf), alpha = 0.2, fill = 'lightgrey') +
+  geom_line(data = data |> filter(EP == FALSE | is.na(EP)),
+                                  aes(x = Time, y = Temp.C, group = EPgroup), colour = 'black') +
+  geom_line(data = data |> filter(EP == TRUE),
+                                  aes(x = Time, y = Temp.C, group = EPgroup), colour = 'red') +            
+  geom_line(aes(x = Time, y = Level.m*20), colour = 'blue') +
+  # geom_vline(aes(xintercept = closed), colour = 'red') +
+  # geom_vline(aes(xintercept = opened), colour = 'darkgreen') +
+  geom_hline(aes(yintercept = 20), colour = 'darkgrey', linetype = 'dashed') +
+    # geom_point(aes(x = alarm, y = WaterTemperature_C), shape = 22, fill = 'red',size = 3, alpha = 0.6) +
+    # geom_point(aes(x = cleared, y = 20), shape = 23, fill = 'red', size = 3, alpha = 0.6) +
+  scale_y_continuous(name = "Water Temperature (°C)",
+                     sec.axis = sec_axis(trans= ~./20, name = "Water Level (meters)"),
+                     lim = c(0,31)) +
+    facet_wrap(~Station) +
+    ggtitle(paste(rivers[i], unique(data$Year[data$River.Name == rivers[i]]), sep = " - ")) +
+  theme_bw() +
+  scale_x_datetime(date_breaks = "1 week", date_labels = "%d %b", limits = c(as_datetime("2023-07-01 00:00:00"), as_datetime("2023-09-15 00:00:00")))  +
+  theme(axis.text.x = element_text(angle = 90, vjust=0.5))
+
+  print(p)
+  cat('\n\n')
+}
+
+```
+
+## 2022 Loggers
+
+```{r Goose Bay 2022, echo = FALSE, warning = FALSE, message= FALSE, fig.fullwidth = TRUE}
+
+rivers <- unique(river_closures2$River.Name[river_closures2$Year==2022 & river_closures2$Detachment == "Goose Bay" & river_closures2$Time >= as_datetime("2022-07-01 00:00:00", tz = "America/St_Johns") & river_closures2$Time <= as_datetime("2022-09-15 00:00:00", tz = "America/St_Johns")] )
+
+rivers <- rivers[-1]
+
+for (i in seq_along(rivers)) {
+  
+  data <- river_closures2 |> 
+    filter(Year == 2022) |> 
+    filter(River.Name == rivers[i]) |> 
+    filter(!is.na(Temp.C))
+  
+  
+  
+  p <- ggplot(data) +
+       geom_rect(aes(xmin = closed, xmax = opened, ymin = -Inf, ymax = Inf), alpha = 0.2, fill = 'lightgrey') +
+  geom_line(data = data |> filter(EP == FALSE | is.na(EP)),
+                                  aes(x = Time, y = Temp.C, group = EPgroup), colour = 'black') +
+  geom_line(data = data |> filter(EP == TRUE),
+                                  aes(x = Time, y = Temp.C, group = EPgroup), colour = 'red') +            
+  geom_line(aes(x = Time, y = Level.m*20), colour = 'blue') +
+  # geom_vline(aes(xintercept = closed), colour = 'red') +
+  # geom_vline(aes(xintercept = opened), colour = 'darkgreen') +
+  geom_hline(aes(yintercept = 20), colour = 'darkgrey', linetype = 'dashed') +
+    # geom_point(aes(x = alarm, y = WaterTemperature_C), shape = 22, fill = 'red',size = 3, alpha = 0.6) +
+    # geom_point(aes(x = cleared, y = 20), shape = 23, fill = 'red', size = 3, alpha = 0.6) +
+  scale_y_continuous(name = "Water Temperature (°C)",
+                     sec.axis = sec_axis(trans= ~./20, name = "Water Level (meters)"),
+                     lim = c(0,31)) +
+    facet_wrap(~Station) +
+     ggtitle(paste(rivers[i], unique(data$Year[data$River.Name == rivers[i]]), sep = " - ")) +
+  theme_bw() +
+  scale_x_datetime(date_breaks = "1 week", date_labels = "%d %b", limits = c(as_datetime("2022-07-01 00:00:00"), as_datetime("2022-09-15 00:00:00")))  +
+  theme(axis.text.x = element_text(angle = 90, vjust=0.5))
+
+  print(p)
+  cat('\n\n')
+}
+
+```
+
+
